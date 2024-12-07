@@ -12,24 +12,19 @@ import {
 import { Views } from '../../../../views'
 
 export default function (server: Server, ctx: AppContext) {
-  debugger
   const getProfile = createPipeline(skeleton, hydration, noRules, presentation)
   server.app.bsky.actor.getProfile({
     auth: ctx.authVerifier.optionalStandardOrRole,
     handler: async ({ auth, params, req }) => {
       const { viewer, includeTakedowns } = ctx.authVerifier.parseCreds(auth)
-      debugger
       const labelers = ctx.reqLabelers(req)
       const hydrateCtx = await ctx.hydrator.createContext({
         labelers,
         viewer,
         includeTakedowns,
       })
-      debugger
       const result = await getProfile({ ...params, hydrateCtx }, ctx)
-      debugger
       const repoRev = await ctx.hydrator.actor.getRepoRevSafe(viewer)
-      debugger
       return {
         encoding: 'application/json',
         body: result,

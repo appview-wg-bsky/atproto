@@ -189,7 +189,6 @@ export class AuthVerifier {
   optionalStandardOrRole = async (
     ctx: ReqCtx,
   ): Promise<StandardOutput | RoleOutput | NullOutput> => {
-    debugger
     if (isBearerToken(ctx.req)) {
       return await this.standard(ctx)
     } else {
