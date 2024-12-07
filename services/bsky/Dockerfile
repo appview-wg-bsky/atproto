@@ -1,4 +1,4 @@
-FROM node:20.11-alpine as build
+FROM node:20.18-alpine as build
 
 RUN npm install -g pnpm
 
@@ -33,7 +33,7 @@ RUN pnpm install --prod --shamefully-hoist --frozen-lockfile --prefer-offline > 
 WORKDIR services/bsky
 
 # Uses assets from build stage to reduce build size
-FROM node:20.11-alpine
+FROM node:20.18-alpine
 
 # dumb-init is used to handle signals properly.
 # runit is installed so it can be (optionally) used for logging via svlogd.
@@ -47,12 +47,13 @@ WORKDIR /app/services/bsky
 COPY --from=build /app /app
 
 EXPOSE 3000
+EXPOSE 9229
 ENV PORT=3000
 ENV NODE_ENV=production
 
 # https://github.com/nodejs/docker-node/blob/master/docs/BestPractices.md#non-root-user
 USER node
-CMD ["node", "--heapsnapshot-signal=SIGUSR2", "--enable-source-maps", "api.js"]
+CMD ["node", "--heapsnapshot-signal=SIGUSR2", "--enable-source-maps", "--inspect=0.0.0.0:9229", "api.js"]
 
 LABEL org.opencontainers.image.source=https://github.com/bluesky-social/atproto
 LABEL org.opencontainers.image.description="Bsky App View"
