@@ -1,6 +1,10 @@
 import { sql } from 'kysely'
 import { CID } from 'multiformats/cid'
-import { AtpAgent, ComAtprotoSyncGetLatestCommit } from '@atproto/api'
+import {
+  AtpAgent,
+  ComAtprotoSyncGetLatestCommit,
+  stringifyLex,
+} from '@atproto/api'
 import {
   readCarWithRoot,
   WriteOpAction,
@@ -33,6 +37,7 @@ import RecordProcessor from './processor'
 import { subLogger } from '../../../logger'
 import { retryHttp } from '../../../util/retry'
 import { BackgroundQueue } from '../background'
+import { executeRaw, transpose } from '../util'
 
 export class IndexingService {
   records: {
@@ -119,6 +124,62 @@ export class IndexingService {
       const indexer = indexingTx.findIndexerForCollection(collection)
       if (!indexer) return
       await indexer.insertBulkRecords(records, opts)
+    })
+  }
+
+  // Takes a map of record arrays indexed by collection name
+  async indexRecordsBulkAcrossCollections(
+    records: Map<
+      string,
+      Array<{
+        uri: AtUri
+        cid: CID
+        obj: unknown
+        timestamp: string
+      }>
+    >,
+    opts?: { disableNotifs?: boolean; disableLabels?: boolean },
+  ) {
+    this.db.assertNotTransaction()
+    await this.db.transaction(async (txn) => {
+      await Promise.all([
+        ...Array.from(records.entries()).map(async ([collection, records]) => {
+          const indexingTx = this.transact(txn)
+          const indexer = indexingTx.findIndexerForCollection(collection)
+          if (!indexer) {
+            console.warn(`No indexer for collection ${collection}`)
+            return
+          }
+          return indexer.insertBulkRecords(records, opts)
+        }),
+        async () => {
+          const toInsertRecords = transpose(
+            [...records.values()].flat(),
+            (record) => [
+              /* uri: */ record.uri.toString(),
+              /* cid: */ record.cid.toString(),
+              /* did: */ record.uri.host,
+              /* json: */ stringifyLex(record.obj),
+              /* indexedAt: */ record.timestamp,
+            ],
+          )
+
+          return executeRaw(
+            this.db.db,
+            `
+            INSERT INTO record ("uri", "cid", "did", "json", "indexedAt")
+            SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+            ON CONFLICT DO NOTHING
+          `,
+            toInsertRecords,
+          ).catch((e) => {
+            console.error(
+              `Failed to insert into records table from ${toInsertRecords[0][0]} to ${toInsertRecords[toInsertRecords.length - 1][0]}`,
+              e,
+            )
+          })
+        },
+      ])
     })
   }
 
