@@ -1,38 +1,43 @@
 import { sql } from 'kysely'
 import { CID } from 'multiformats/cid'
-import { AtpAgent, ComAtprotoSyncGetLatestCommit } from '@atproto/api'
-import { DAY, HOUR } from '@atproto/common'
-import { IdResolver, getPds } from '@atproto/identity'
-import { ValidationError } from '@atproto/lexicon'
 import {
-  VerifiedRepo,
-  WriteOpAction,
-  getAndParseRecord,
+  AtpAgent,
+  ComAtprotoSyncGetLatestCommit,
+  stringifyLex,
+} from '@atproto/api'
+import {
   readCarWithRoot,
+  WriteOpAction,
   verifyRepo,
+  VerifiedRepo,
+  getAndParseRecord,
 } from '@atproto/repo'
 import { AtUri } from '@atproto/syntax'
-import { subLogger } from '../../../logger'
-import { retryXrpc } from '../../../util/retry'
-import { BackgroundQueue } from '../background'
+import { IdResolver, getPds } from '@atproto/identity'
+import { DAY, HOUR } from '@atproto/common'
+import { ValidationError } from '@atproto/lexicon'
 import { Database } from '../db'
 import { Actor } from '../db/tables/actor'
-import * as Block from './plugins/block'
-import * as ChatDeclaration from './plugins/chat-declaration'
-import * as FeedGenerator from './plugins/feed-generator'
-import * as Follow from './plugins/follow'
-import * as Labeler from './plugins/labeler'
-import * as Like from './plugins/like'
-import * as List from './plugins/list'
-import * as ListBlock from './plugins/list-block'
-import * as ListItem from './plugins/list-item'
 import * as Post from './plugins/post'
-import * as Postgate from './plugins/post-gate'
-import * as Profile from './plugins/profile'
-import * as Repost from './plugins/repost'
-import * as StarterPack from './plugins/starter-pack'
 import * as Threadgate from './plugins/thread-gate'
-import { RecordProcessor } from './processor'
+import * as Postgate from './plugins/post-gate'
+import * as Like from './plugins/like'
+import * as Repost from './plugins/repost'
+import * as Follow from './plugins/follow'
+import * as Profile from './plugins/profile'
+import * as List from './plugins/list'
+import * as ListItem from './plugins/list-item'
+import * as ListBlock from './plugins/list-block'
+import * as Block from './plugins/block'
+import * as FeedGenerator from './plugins/feed-generator'
+import * as StarterPack from './plugins/starter-pack'
+import * as Labeler from './plugins/labeler'
+import * as ChatDeclaration from './plugins/chat-declaration'
+import RecordProcessor from './processor'
+import { subLogger } from '../../../logger'
+import { retryHttp } from '../../../util/retry'
+import { BackgroundQueue } from '../background'
+import { executeRaw, transpose } from '../util'
 
 export class IndexingService {
   records: {
@@ -122,6 +127,62 @@ export class IndexingService {
     })
   }
 
+  // Takes a map of record arrays indexed by collection name
+  async indexRecordsBulkAcrossCollections(
+    records: Map<
+      string,
+      Array<{
+        uri: AtUri
+        cid: CID
+        obj: unknown
+        timestamp: string
+      }>
+    >,
+    opts?: { disableNotifs?: boolean; disableLabels?: boolean },
+  ) {
+    this.db.assertNotTransaction()
+    await this.db.transaction(async (txn) => {
+      await Promise.all([
+        ...Array.from(records.entries()).map(async ([collection, records]) => {
+          const indexingTx = this.transact(txn)
+          const indexer = indexingTx.findIndexerForCollection(collection)
+          if (!indexer) {
+            console.warn(`No indexer for collection ${collection}`)
+            return
+          }
+          return indexer.insertBulkRecords(records, opts)
+        }),
+        async () => {
+          const toInsertRecords = transpose(
+            [...records.values()].flat(),
+            (record) => [
+              /* uri: */ record.uri.toString(),
+              /* cid: */ record.cid.toString(),
+              /* did: */ record.uri.host,
+              /* json: */ stringifyLex(record.obj),
+              /* indexedAt: */ record.timestamp,
+            ],
+          )
+
+          return executeRaw(
+            this.db.db,
+            `
+            INSERT INTO record ("uri", "cid", "did", "json", "indexedAt")
+            SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+            ON CONFLICT DO NOTHING
+          `,
+            toInsertRecords,
+          ).catch((e) => {
+            console.error(
+              `Failed to insert into records table from ${toInsertRecords[0][0]} to ${toInsertRecords[toInsertRecords.length - 1][0]}`,
+              e,
+            )
+          })
+        },
+      ])
+    })
+  }
+
   async deleteRecord(uri: AtUri, cascading = false) {
     this.db.assertNotTransaction()
     await this.db.transaction(async (txn) => {
@@ -184,7 +245,7 @@ export class IndexingService {
     )
     const { api } = new AtpAgent({ service: pds })
 
-    const { data: car } = await retryXrpc(() =>
+    const { data: car } = await retryHttp(() =>
       api.com.atproto.sync.getRepo({ did }),
     )
     const { root, blocks } = await readCarWithRoot(car)
@@ -306,7 +367,7 @@ export class IndexingService {
     if (!pds) return false
     const { api } = new AtpAgent({ service: pds })
     try {
-      await retryXrpc(() => api.com.atproto.sync.getLatestCommit({ did }))
+      await retryHttp(() => api.com.atproto.sync.getLatestCommit({ did }))
       return true
     } catch (err) {
       if (err instanceof ComAtprotoSyncGetLatestCommit.RepoNotFoundError) {
