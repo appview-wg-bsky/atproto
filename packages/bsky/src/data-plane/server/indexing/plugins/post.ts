@@ -292,11 +292,6 @@ const insertBulkFn = async (
         'replyParentCid',
         'langs',
         'tags',
-        'invalidReplyRoot',
-        'violatesThreadGate',
-        'violatesEmbeddingRules',
-        'hasThreadGate',
-        'hasPostGate',
         'indexedAt',
       ],
       records.map(({ uri, cid, obj, timestamp }) => {
@@ -318,11 +313,6 @@ const insertBulkFn = async (
           replyParentCid: obj.reply?.parent.cid ?? null,
           langs: obj.langs?.length ? obj.langs : null,
           tags: obj.tags?.length ? obj.tags : null,
-          invalidReplyRoot: null,
-          violatesThreadGate: null,
-          violatesEmbeddingRules: null,
-          hasThreadGate: null,
-          hasPostGate: null,
           indexedAt,
           sortAt,
         }
