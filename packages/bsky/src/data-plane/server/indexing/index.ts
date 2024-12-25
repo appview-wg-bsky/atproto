@@ -144,8 +144,6 @@ export class IndexingService {
 
     this.db.assertNotTransaction()
     await this.db.transaction(async (txn) => {
-      const client = await txn.pool.connect()
-
       await Promise.all([
         ...Array.from(records.entries()).map(async ([collection, records]) => {
           if (!records.length) return
@@ -194,7 +192,7 @@ export class IndexingService {
         //   })
         // },
         copyIntoTable(
-          client,
+          this.db.pool,
           'record',
           ['uri', 'cid', 'did', 'json', 'indexedAt'],
           allRecords.map(({ uri, cid, obj, timestamp }) => ({
