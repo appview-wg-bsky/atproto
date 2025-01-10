@@ -104,9 +104,17 @@ export default (db: Database): Partial<ServiceImpl<typeof Service>> => ({
       tryIndex: true,
     })
 
+    console.time('getTimeline followQb')
+    console.time('getTimeline selfQb')
     const [followRes, selfRes] = await Promise.all([
-      followQb.execute(),
-      selfQb.execute(),
+      followQb.execute().then((res) => {
+        console.timeEnd('getTimeline followQb')
+        return res
+      }),
+      selfQb.execute().then((res) => {
+        console.timeEnd('getTimeline selfQb')
+        return res
+      }),
     ])
 
     const feedItems = [...followRes, ...selfRes]
