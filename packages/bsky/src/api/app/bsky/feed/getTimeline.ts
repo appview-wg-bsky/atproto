@@ -28,12 +28,14 @@ export default function (server: Server, ctx: AppContext) {
       const labelers = ctx.reqLabelers(req)
       const hydrateCtx = await ctx.hydrator.createContext({ labelers, viewer })
 
+      console.time('getTimeline')
       const result = await getTimeline(
         { ...params, hydrateCtx: hydrateCtx.copy({ viewer }) },
         ctx,
       )
 
       const repoRev = await ctx.hydrator.actor.getRepoRevSafe(viewer)
+      console.timeEnd('getTimeline')
 
       return {
         encoding: 'application/json',
@@ -52,11 +54,13 @@ export const skeleton = async (inputs: {
   if (clearlyBadCursor(params.cursor)) {
     return { items: [] }
   }
+  console.time('getTimeline skeleton')
   const res = await ctx.dataplane.getTimeline({
     actorDid: params.hydrateCtx.viewer,
     limit: params.limit,
     cursor: params.cursor,
   })
+  console.timeEnd('getTimeline skeleton')
   return {
     items: res.items.map((item) => ({
       post: { uri: item.uri, cid: item.cid || undefined },
@@ -74,7 +78,10 @@ const hydration = async (inputs: {
   skeleton: Skeleton
 }): Promise<HydrationState> => {
   const { ctx, params, skeleton } = inputs
-  return ctx.hydrator.hydrateFeedItems(skeleton.items, params.hydrateCtx)
+  console.time('getTimeline hydration')
+  return ctx.hydrator
+    .hydrateFeedItems(skeleton.items, params.hydrateCtx)
+    .then((r) => (console.timeEnd('getTimeline hydration'), r))
 }
 
 const noBlocksOrMutes = (inputs: {
