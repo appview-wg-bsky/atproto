@@ -341,21 +341,25 @@ export class Hydrator {
     state: HydrationState = {},
   ): Promise<HydrationState> {
     const uris = refs.map((ref) => ref.uri)
+    console.time('hydratePosts postsLayer0')
     const postsLayer0 = await this.feed.getPosts(
       uris,
       ctx.includeTakedowns,
       state.posts,
     )
+    console.timeEnd('hydratePosts postsLayer0')
     // first level embeds plus thread roots we haven't fetched yet
     const urisLayer1 = nestedRecordUrisFromPosts(postsLayer0)
     const additionalRootUris = rootUrisFromPosts(postsLayer0) // supports computing threadgates
     const urisLayer1ByCollection = urisByCollection(urisLayer1)
     const embedPostUrisLayer1 =
       urisLayer1ByCollection.get(ids.AppBskyFeedPost) ?? []
+    console.time('hydratePosts postsLayer1')
     const postsLayer1 = await this.feed.getPosts(
       [...embedPostUrisLayer1, ...additionalRootUris],
       ctx.includeTakedowns,
     )
+    console.timeEnd('hydratePosts postsLayer1')
     // second level embeds, ignoring any additional root uris we mixed-in to the previous layer
     const urisLayer2 = nestedRecordUrisFromPosts(
       postsLayer1,
@@ -385,10 +389,12 @@ export class Hydrator {
         postUrisWithThreadgates.add(uri)
       }
     }
+    console.time('hydratePosts postsLayer2')
     const [postsLayer2, threadgates] = await Promise.all([
       this.feed.getPosts(embedPostUrisLayer2, ctx.includeTakedowns),
       this.feed.getThreadgatesForPosts([...postUrisWithThreadgates.values()]),
     ])
+    console.timeEnd('hydratePosts postsLayer2')
     // collect list/feedgen embeds, lists in threadgates, post record hydration
     const threadgateListUris = getListUrisFromThreadgates(threadgates)
     const nestedListUris = [
@@ -426,6 +432,7 @@ export class Hydrator {
       }
     }
 
+    console.time('hydratePosts hydrate everything else')
     const [
       postAggs,
       postViewers,
@@ -451,6 +458,7 @@ export class Hydrator {
       this.hydrateStarterPacksBasic(nestedStarterPackUris, ctx),
       this.feed.getPostgatesForPosts([...postUrisWithPostgates.values()]),
     ])
+    console.timeEnd('hydratePosts hydrate everything else')
     if (!ctx.includeTakedowns) {
       actionTakedownLabels(allPostUris, posts, labels)
     }
@@ -538,10 +546,12 @@ export class Hydrator {
     ctx: HydrateCtx,
   ): Promise<HydrationState> {
     // get posts, collect reply refs
+    console.time('hydrateFeedItems getPosts')
     const posts = await this.feed.getPosts(
       items.map((item) => item.post.uri),
       ctx.includeTakedowns,
     )
+    console.timeEnd('hydrateFeedItems getPosts')
     const rootUris: string[] = []
     const parentUris: string[] = []
     const postAndReplyRefs: ItemRef[] = []
@@ -555,10 +565,12 @@ export class Hydrator {
       }
     })
     // get replies, collect reply parent authors
+    console.time('hydrateFeedItems getReplies')
     const replies = await this.feed.getPosts(
       [...rootUris, ...parentUris],
       ctx.includeTakedowns,
     )
+    console.timeEnd('hydrateFeedItems getReplies')
     const replyParentAuthors: string[] = []
     parentUris.forEach((uri) => {
       const parent = replies.get(uri)
@@ -567,15 +579,20 @@ export class Hydrator {
     })
     // hydrate state for all posts, reposts, authors of reposts + reply parent authors
     const repostUris = mapDefined(items, (item) => item.repost?.uri)
+    console.time('hydrateFeedItems hydratePosts')
+    console.time('hydrateFeedItems hydrateProfiles')
+    console.time('hydrateFeedItems hydrateReposts')
     const [postState, repostProfileState, reposts] = await Promise.all([
       this.hydratePosts(postAndReplyRefs, ctx, {
         posts: posts.merge(replies), // avoids refetches of posts
-      }),
+      }).then((r) => (console.timeEnd('hydrateFeedItems hydratePosts'), r)),
       this.hydrateProfiles(
         [...repostUris.map(didFromUri), ...replyParentAuthors],
         ctx,
-      ),
-      this.feed.getReposts(repostUris, ctx.includeTakedowns),
+      ).then((r) => (console.timeEnd('hydrateFeedItems hydrateProfiles'), r)),
+      this.feed
+        .getReposts(repostUris, ctx.includeTakedowns)
+        .then((r) => (console.timeEnd('hydrateFeedItems hydrateReposts'), r)),
     ])
     return mergeManyStates(postState, repostProfileState, {
       reposts,
