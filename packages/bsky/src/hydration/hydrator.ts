@@ -189,11 +189,13 @@ export class Hydrator {
     ctx: HydrateCtx,
   ): Promise<HydrationState> {
     const includeTakedowns = ctx.includeTakedowns || ctx.includeActorTakedowns
+    console.time('hydrateProfiles')
     const [actors, labels, profileViewersState] = await Promise.all([
       this.actor.getActors(dids, includeTakedowns),
       this.label.getLabelsForSubjects(labelSubjectsForDid(dids), ctx.labelers),
       this.hydrateProfileViewers(dids, ctx),
     ])
+    console.timeEnd('hydrateProfiles')
     if (!includeTakedowns) {
       actionTakedownLabels(dids, actors, labels)
     }
@@ -278,12 +280,14 @@ export class Hydrator {
   // - list
   //   - profile basic
   async hydrateLists(uris: string[], ctx: HydrateCtx): Promise<HydrationState> {
+    console.time('hydrateLists')
     const [listsState, profilesState] = await Promise.all([
       this.hydrateListsBasic(uris, ctx, {
         skipAuthors: true, // handled via author profile hydration
       }),
       this.hydrateProfilesBasic(uris.map(didFromUri), ctx),
     ])
+    console.timeEnd('hydrateLists')
     return mergeStates(listsState, profilesState)
   }
 
@@ -677,6 +681,7 @@ export class Hydrator {
     uris: string[], // @TODO any way to get refs here?
     ctx: HydrateCtx,
   ): Promise<HydrationState> {
+    console.time('hydrateFeedGens')
     const [feedgens, feedgenAggs, feedgenViewers, profileState, labels] =
       await Promise.all([
         this.feed.getFeedGens(uris, ctx.includeTakedowns),
@@ -687,6 +692,7 @@ export class Hydrator {
         this.hydrateProfiles(uris.map(didFromUri), ctx),
         this.label.getLabelsForSubjects(uris, ctx.labelers),
       ])
+    console.timeEnd('hydrateFeedGens')
     if (!ctx.includeTakedowns) {
       actionTakedownLabels(uris, feedgens, labels)
     }
@@ -708,6 +714,7 @@ export class Hydrator {
     uris: string[],
     ctx: HydrateCtx,
   ): Promise<HydrationState> {
+    console.time('hydrateStarterPacksBasic')
     const [starterPacks, starterPackAggs, profileState, labels] =
       await Promise.all([
         this.graph.getStarterPacks(uris, ctx.includeTakedowns),
@@ -715,6 +722,7 @@ export class Hydrator {
         this.hydrateProfiles(uris.map(didFromUri), ctx),
         this.label.getLabelsForSubjects(uris, ctx.labelers),
       ])
+    console.timeEnd('hydrateStarterPacksBasic')
     if (!ctx.includeTakedowns) {
       actionTakedownLabels(uris, starterPacks, labels)
     }
@@ -989,6 +997,7 @@ export class Hydrator {
     dids: string[],
     ctx: HydrateCtx,
   ): Promise<HydrationState> {
+    console.time('hydrateLabelers')
     const [labelers, labelerAggs, labelerViewers, profileState] =
       await Promise.all([
         this.label.getLabelers(dids, ctx.includeTakedowns),
@@ -998,6 +1007,7 @@ export class Hydrator {
           : undefined,
         this.hydrateProfiles(dids, ctx),
       ])
+    console.timeEnd('hydrateLabelers')
     actionTakedownLabels(dids, labelers, profileState.labels ?? new Labels())
     return mergeStates(profileState, {
       labelers,
