@@ -73,10 +73,12 @@ export class LabelHydrator {
     labelers: ParsedLabelers,
   ): Promise<Labels> {
     if (!subjects.length || !labelers.dids.length) return new Labels()
+    console.time('getLabelsForSubjects')
     const res = await this.dataplane.getLabels({
       subjects,
       issuers: labelers.dids,
     })
+    console.timeEnd('getLabelsForSubjects')
 
     return res.labels.reduce((acc, cur) => {
       const parsed = parseJsonBytes(cur) as Label | undefined
