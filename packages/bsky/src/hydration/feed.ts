@@ -133,7 +133,8 @@ export class FeedHydrator {
   ): Promise<PostViewerStates> {
     if (!refs.length) return new HydrationMap<PostViewerState>()
     const threadRoots = refs.map((r) => r.threadRoot)
-    console.time('getPostViewerStates')
+    const key = Math.random().toString(16).slice(2)
+    console.time('getPostViewerStates ' + key)
     const [likes, reposts, threadMutesMap] = await Promise.all([
       this.dataplane.getLikesByActorAndSubjects({
         actorDid: viewer,
@@ -145,7 +146,7 @@ export class FeedHydrator {
       }),
       this.getThreadMutes(threadRoots, viewer),
     ])
-    console.timeEnd('getPostViewerStates')
+    console.timeEnd('getPostViewerStates ' + key)
     return refs.reduce((acc, { uri, threadRoot }, i) => {
       return acc.set(uri, {
         like: parseString(likes.uris[i]),
@@ -160,12 +161,13 @@ export class FeedHydrator {
     viewer: string,
   ): Promise<Map<string, boolean>> {
     const deduped = dedupeStrs(threadRoots)
-    console.time('getThreadMutes')
+    const key = Math.random().toString(16).slice(2)
+    console.time('getThreadMutes ' + key)
     const threadMutes = await this.dataplane.getThreadMutesOnSubjects({
       actorDid: viewer,
       threadRoots: deduped,
     })
-    console.timeEnd('getThreadMutes')
+    console.timeEnd('getThreadMutes ' + key)
     return deduped.reduce((acc, cur, i) => {
       return acc.set(cur, threadMutes.muted[i] ?? false)
     }, new Map<string, boolean>())
@@ -212,9 +214,10 @@ export class FeedHydrator {
 
   async getPostAggregates(refs: ItemRef[]): Promise<PostAggs> {
     if (!refs.length) return new HydrationMap<PostAgg>()
-    console.time('getPostAggregates')
+    const key = Math.random().toString(16).slice(2)
+    console.time('getPostAggregates ' + key)
     const counts = await this.dataplane.getInteractionCounts({ refs })
-    console.timeEnd('getPostAggregates')
+    console.timeEnd('getPostAggregates ' + key)
     return refs.reduce((acc, { uri }, i) => {
       return acc.set(uri, {
         likes: counts.likes[i] ?? 0,
@@ -302,9 +305,10 @@ export class FeedHydrator {
     uris: string[],
     includeTakedowns = false,
   ): Promise<Postgates> {
-    console.time('getPostgateRecords')
+    const key = Math.random().toString(16).slice(2)
+    console.time('getPostgateRecords ' + key)
     const res = await this.dataplane.getPostgateRecords({ uris })
-    console.timeEnd('getPostgateRecords')
+    console.timeEnd('getPostgateRecords ' + key)
     return uris.reduce((acc, uri, i) => {
       const record = parseRecord<PostgateRecord>(
         res.records[i],
