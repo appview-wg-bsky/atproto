@@ -153,14 +153,15 @@ export class LabelHydrator {
   ): Promise<LabelerViewerStates> {
     const key = Math.random().toString(16).slice(2)
     console.time(`getLabelerViewerStates ${key}`)
-    const likes = await this.dataplane.getLikesByActorAndSubjects({
-      actorDid: viewer,
-      refs: dids.map((did) => ({ uri: labelerDidToUri(did) })),
-    })
+    // const likes = await this.dataplane.getLikesByActorAndSubjects({
+    //   actorDid: viewer,
+    //   refs: dids.map((did) => ({ uri: labelerDidToUri(did) })),
+    // })
     console.timeEnd(`getLabelerViewerStates ${key}`)
     return dids.reduce((acc, did, i) => {
       return acc.set(did, {
-        like: parseString(likes.uris[i]),
+        // like: parseString(likes.uris[i]),
+        like: undefined,
       })
     }, new HydrationMap<LabelerViewerState>())
   }
