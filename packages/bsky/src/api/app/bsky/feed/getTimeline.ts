@@ -29,14 +29,14 @@ export default function (server: Server, ctx: AppContext) {
       const hydrateCtx = await ctx.hydrator.createContext({ labelers, viewer })
 
       const key = Math.random().toString(16).slice(2)
-      console.time('getTimeline' + key)
+      console.time('getTimeline ' + key)
       const result = await getTimeline(
         { ...params, hydrateCtx: hydrateCtx.copy({ viewer }) },
         ctx,
       )
 
       const repoRev = await ctx.hydrator.actor.getRepoRevSafe(viewer)
-      console.timeEnd('getTimeline' + key)
+      console.timeEnd('getTimeline ' + key)
 
       return {
         encoding: 'application/json',
