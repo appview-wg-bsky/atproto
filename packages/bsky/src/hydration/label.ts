@@ -172,14 +172,15 @@ export class LabelHydrator {
     const refs = dids.map((did) => ({ uri: labelerDidToUri(did) }))
     const key = Math.random().toString(16).slice(2)
     console.time(`getLabelerAggregates ${key}`)
-    const counts = await this.dataplane.getInteractionCounts({
+    // const counts = await this.dataplane.getInteractionCounts({
       refs,
       skipCacheForDids: viewer ? [viewer] : undefined,
     })
     console.timeEnd(`getLabelerAggregates ${key}`)
     return dids.reduce((acc, did, i) => {
       return acc.set(did, {
-        likes: counts.likes[i] ?? 0,
+        // likes: counts.likes[i] ?? 0,
+        likes: 0,
       })
     }, new HydrationMap<LabelerAgg>())
   }
