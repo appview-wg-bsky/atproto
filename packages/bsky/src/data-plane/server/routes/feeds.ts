@@ -93,15 +93,16 @@ export default (db: Database): Partial<ServiceImpl<typeof Service>> => ({
       tryIndex: true,
     })
 
-    console.time('getTimeline followQb')
-    console.time('getTimeline selfQb')
+    const key = Math.random().toString(16).slice(2)
+    console.time('getTimeline followQb ' + key)
+    console.time('getTimeline selfQb ' + key)
     const [followRes, selfRes] = await Promise.all([
       followQb.execute().then((res) => {
-        console.timeEnd('getTimeline followQb')
+        console.timeEnd('getTimeline followQb ' + key)
         return res
       }),
       selfQb.execute().then((res) => {
-        console.timeEnd('getTimeline selfQb')
+        console.timeEnd('getTimeline selfQb ' + key)
         return res
       }),
     ])

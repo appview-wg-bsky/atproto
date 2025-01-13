@@ -186,13 +186,14 @@ export class Hydrator {
     ctx: HydrateCtx,
   ): Promise<HydrationState> {
     const includeTakedowns = ctx.includeTakedowns || ctx.includeActorTakedowns
-    console.time('hydrateProfiles')
+    const key = Math.random().toString(16).slice(2)
+    console.time('hydrateProfiles' + key)
     const [actors, labels, profileViewersState] = await Promise.all([
       this.actor.getActors(dids, includeTakedowns),
       this.label.getLabelsForSubjects(labelSubjectsForDid(dids), ctx.labelers),
       this.hydrateProfileViewers(dids, ctx),
     ])
-    console.timeEnd('hydrateProfiles')
+    console.timeEnd('hydrateProfiles' + key)
     if (!includeTakedowns) {
       actionTakedownLabels(dids, actors, labels)
     }
@@ -277,12 +278,13 @@ export class Hydrator {
   // - list
   //   - profile basic
   async hydrateLists(uris: string[], ctx: HydrateCtx): Promise<HydrationState> {
-    console.time('hydrateLists')
+    const key = Math.random().toString(16).slice(2)
+    console.time('hydrateLists' + key)
     const [listsState, profilesState] = await Promise.all([
       await this.hydrateListsBasic(uris, ctx),
       await this.hydrateProfilesBasic(uris.map(didFromUri), ctx),
     ])
-    console.timeEnd('hydrateLists')
+    console.timeEnd('hydrateLists' + key)
     return mergeStates(listsState, profilesState)
   }
 
@@ -344,25 +346,26 @@ export class Hydrator {
     state: HydrationState = {},
   ): Promise<HydrationState> {
     const uris = refs.map((ref) => ref.uri)
-    console.time('hydratePosts postsLayer0')
+    const key = Math.random().toString(16).slice(2)
+    console.time('hydratePosts postsLayer0 ' + key)
     const postsLayer0 = await this.feed.getPosts(
       uris,
       ctx.includeTakedowns,
       state.posts,
     )
-    console.timeEnd('hydratePosts postsLayer0')
+    console.timeEnd('hydratePosts postsLayer0 ' + key)
     // first level embeds plus thread roots we haven't fetched yet
     const urisLayer1 = nestedRecordUrisFromPosts(postsLayer0)
     const additionalRootUris = rootUrisFromPosts(postsLayer0) // supports computing threadgates
     const urisLayer1ByCollection = urisByCollection(urisLayer1)
     const embedPostUrisLayer1 =
       urisLayer1ByCollection.get(ids.AppBskyFeedPost) ?? []
-    console.time('hydratePosts postsLayer1')
+    console.time('hydratePosts postsLayer1 ' + key)
     const postsLayer1 = await this.feed.getPosts(
       [...embedPostUrisLayer1, ...additionalRootUris],
       ctx.includeTakedowns,
     )
-    console.timeEnd('hydratePosts postsLayer1')
+    console.timeEnd('hydratePosts postsLayer1 ' + key)
     // second level embeds, ignoring any additional root uris we mixed-in to the previous layer
     const urisLayer2 = nestedRecordUrisFromPosts(
       postsLayer1,
@@ -392,12 +395,12 @@ export class Hydrator {
         postUrisWithThreadgates.add(uri)
       }
     }
-    console.time('hydratePosts postsLayer2')
+    console.time('hydratePosts postsLayer2 ' + key)
     const [postsLayer2, threadgates] = await Promise.all([
       this.feed.getPosts(embedPostUrisLayer2, ctx.includeTakedowns),
       this.feed.getThreadgatesForPosts([...postUrisWithThreadgates.values()]),
     ])
-    console.timeEnd('hydratePosts postsLayer2')
+    console.timeEnd('hydratePosts postsLayer2 ' + key)
     // collect list/feedgen embeds, lists in threadgates, post record hydration
     const threadgateListUris = getListUrisFromThreadgates(threadgates)
     const nestedListUris = [
@@ -435,7 +438,7 @@ export class Hydrator {
       }
     }
 
-    console.time('hydratePosts hydrate everything else')
+    console.time('hydratePosts hydrate everything else ' + key)
     const [
       postAggs,
       postViewers,
@@ -461,7 +464,7 @@ export class Hydrator {
       this.hydrateStarterPacksBasic(nestedStarterPackUris, ctx),
       this.feed.getPostgatesForPosts([...postUrisWithPostgates.values()]),
     ])
-    console.timeEnd('hydratePosts hydrate everything else')
+    console.timeEnd('hydratePosts hydrate everything else ' + key)
     if (!ctx.includeTakedowns) {
       actionTakedownLabels(allPostUris, posts, labels)
     }
@@ -518,9 +521,10 @@ export class Hydrator {
       }
     }
     // replace embed/parent/root pairs with block state
-    console.time('getPostBlocks')
+    const key = Math.random().toString(16).slice(2)
+    console.time('getPostBlocks ' + key)
     const blocks = await this.graph.getBidirectionalBlocks(relationships)
-    console.timeEnd('getPostBlocks')
+    console.timeEnd('getPostBlocks ' + key)
     for (const [uri, { embed, parent, root }] of postBlocksPairs) {
       postBlocks.set(uri, {
         embed: !!embed && blocks.isBlocked(...embed),
@@ -551,12 +555,13 @@ export class Hydrator {
     ctx: HydrateCtx,
   ): Promise<HydrationState> {
     // get posts, collect reply refs
-    console.time('hydrateFeedItems getPosts')
+    const key = Math.random().toString(16).slice(2)
+    console.time('hydrateFeedItems getPosts ' + key)
     const posts = await this.feed.getPosts(
       items.map((item) => item.post.uri),
       ctx.includeTakedowns,
     )
-    console.timeEnd('hydrateFeedItems getPosts')
+    console.timeEnd('hydrateFeedItems getPosts ' + key)
     const rootUris: string[] = []
     const parentUris: string[] = []
     const postAndReplyRefs: ItemRef[] = []
@@ -570,12 +575,12 @@ export class Hydrator {
       }
     })
     // get replies, collect reply parent authors
-    console.time('hydrateFeedItems getReplies')
+    console.time('hydrateFeedItems getReplies ' + key)
     const replies = await this.feed.getPosts(
       [...rootUris, ...parentUris],
       ctx.includeTakedowns,
     )
-    console.timeEnd('hydrateFeedItems getReplies')
+    console.timeEnd('hydrateFeedItems getReplies ' + key)
     const replyParentAuthors: string[] = []
     parentUris.forEach((uri) => {
       const parent = replies.get(uri)
@@ -584,20 +589,26 @@ export class Hydrator {
     })
     // hydrate state for all posts, reposts, authors of reposts + reply parent authors
     const repostUris = mapDefined(items, (item) => item.repost?.uri)
-    console.time('hydrateFeedItems hydratePosts')
-    console.time('hydrateFeedItems hydrateProfiles')
-    console.time('hydrateFeedItems hydrateReposts')
+    console.time('hydrateFeedItems hydratePosts ' + key)
+    console.time('hydrateFeedItems hydrateProfiles ' + key)
+    console.time('hydrateFeedItems hydrateReposts ' + key)
     const [postState, repostProfileState, reposts] = await Promise.all([
       this.hydratePosts(postAndReplyRefs, ctx, {
         posts: posts.merge(replies), // avoids refetches of posts
-      }).then((r) => (console.timeEnd('hydrateFeedItems hydratePosts'), r)),
+      }).then(
+        (r) => (console.timeEnd('hydrateFeedItems hydratePosts ' + key), r),
+      ),
       this.hydrateProfiles(
         [...repostUris.map(didFromUri), ...replyParentAuthors],
         ctx,
-      ).then((r) => (console.timeEnd('hydrateFeedItems hydrateProfiles'), r)),
+      ).then(
+        (r) => (console.timeEnd('hydrateFeedItems hydrateProfiles ' + key), r),
+      ),
       this.feed
         .getReposts(repostUris, ctx.includeTakedowns)
-        .then((r) => (console.timeEnd('hydrateFeedItems hydrateReposts'), r)),
+        .then(
+          (r) => (console.timeEnd('hydrateFeedItems hydrateReposts ' + key), r),
+        ),
     ])
     return mergeManyStates(postState, repostProfileState, {
       reposts,
@@ -630,7 +641,8 @@ export class Hydrator {
     uris: string[], // @TODO any way to get refs here?
     ctx: HydrateCtx,
   ): Promise<HydrationState> {
-    console.time('hydrateFeedGens')
+    const key = Math.random().toString(16).slice(2)
+    console.time('hydrateFeedGens ' + key)
     const [feedgens, feedgenAggs, feedgenViewers, profileState, labels] =
       await Promise.all([
         this.feed.getFeedGens(uris, ctx.includeTakedowns),
@@ -641,7 +653,7 @@ export class Hydrator {
         this.hydrateProfiles(uris.map(didFromUri), ctx),
         this.label.getLabelsForSubjects(uris, ctx.labelers),
       ])
-    console.timeEnd('hydrateFeedGens')
+    console.timeEnd('hydrateFeedGens ' + key)
     if (!ctx.includeTakedowns) {
       actionTakedownLabels(uris, feedgens, labels)
     }
@@ -663,7 +675,8 @@ export class Hydrator {
     uris: string[],
     ctx: HydrateCtx,
   ): Promise<HydrationState> {
-    console.time('hydrateStarterPacksBasic')
+    const key = Math.random().toString(16).slice(2)
+    console.time('hydrateStarterPacksBasic ' + key)
     const [starterPacks, starterPackAggs, profileState, labels] =
       await Promise.all([
         this.graph.getStarterPacks(uris, ctx.includeTakedowns),
@@ -671,7 +684,7 @@ export class Hydrator {
         this.hydrateProfiles(uris.map(didFromUri), ctx),
         this.label.getLabelsForSubjects(uris, ctx.labelers),
       ])
-    console.timeEnd('hydrateStarterPacksBasic')
+    console.timeEnd('hydrateStarterPacksBasic ' + key)
     if (!ctx.includeTakedowns) {
       actionTakedownLabels(uris, starterPacks, labels)
     }
@@ -923,7 +936,8 @@ export class Hydrator {
     dids: string[],
     ctx: HydrateCtx,
   ): Promise<HydrationState> {
-    console.time('hydrateLabelers')
+    const key = Math.random().toString(16).slice(2)
+    console.time('hydrateLabelers ' + key)
     const [labelers, labelerAggs, labelerViewers, profileState] =
       await Promise.all([
         this.label.getLabelers(dids, ctx.includeTakedowns),
@@ -933,7 +947,7 @@ export class Hydrator {
           : undefined,
         this.hydrateProfiles(dids, ctx),
       ])
-    console.timeEnd('hydrateLabelers')
+    console.timeEnd('hydrateLabelers ' + key)
     actionTakedownLabels(dids, labelers, profileState.labels ?? new Labels())
     return mergeStates(profileState, {
       labelers,
