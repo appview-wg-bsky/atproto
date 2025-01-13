@@ -168,17 +168,19 @@ export class Hydrator {
     const viewer = ctx.viewer
     if (!viewer) return {}
     const key = Math.random().toString(16).slice(2)
-    console.time(`hydrateProfileViewers ${key}`)
+    console.time(`getProfileViewerStatesNaive ${key}`)
     const profileViewers = await this.actor.getProfileViewerStatesNaive(
       dids,
       viewer,
     )
+    console.timeEnd(`getProfileViewerStatesNaive ${key}`)
     const listUris: string[] = []
     profileViewers?.forEach((item) => {
       listUris.push(...listUrisFromProfileViewer(item))
     })
+    console.time(`hydrateListsBasic ${key}`)
     const listState = await this.hydrateListsBasic(listUris, ctx)
-    console.timeEnd(`hydrateProfileViewers ${key}`)
+    console.timeEnd(`hydrateListsBasic ${key}`)
     // if a list no longer exists or is not a mod list, then remove from viewer state
     profileViewers?.forEach((item) => {
       removeNonModListsFromProfileViewer(item, listState)
