@@ -121,9 +121,12 @@ export class LabelHydrator {
     dids: string[],
     includeTakedowns = false,
   ): Promise<Labelers> {
+    const key = Math.random().toString(16).slice(2)
+    console.time(`hydrateLabelers ${key}`)
     const res = await this.dataplane.getLabelerRecords({
       uris: dids.map(labelerDidToUri),
     })
+    console.timeEnd(`hydrateLabelers ${key}`)
     return dids.reduce((acc, did, i) => {
       const record = parseRecord<LabelerRecord>(
         res.records[i],
@@ -137,10 +140,13 @@ export class LabelHydrator {
     dids: string[],
     viewer: string,
   ): Promise<LabelerViewerStates> {
+    const key = Math.random().toString(16).slice(2)
+    console.time(`getLabelerViewerStates ${key}`)
     const likes = await this.dataplane.getLikesByActorAndSubjects({
       actorDid: viewer,
       refs: dids.map((did) => ({ uri: labelerDidToUri(did) })),
     })
+    console.timeEnd(`getLabelerViewerStates ${key}`)
     return dids.reduce((acc, did, i) => {
       return acc.set(did, {
         like: parseString(likes.uris[i]),
@@ -150,7 +156,10 @@ export class LabelHydrator {
 
   async getLabelerAggregates(dids: string[]): Promise<LabelerAggs> {
     const refs = dids.map((did) => ({ uri: labelerDidToUri(did) }))
+    const key = Math.random().toString(16).slice(2)
+    console.time(`getLabelerAggregates ${key}`)
     const counts = await this.dataplane.getInteractionCounts({ refs })
+    console.timeEnd(`getLabelerAggregates ${key}`)
     return dids.reduce((acc, did, i) => {
       return acc.set(did, {
         likes: counts.likes[i] ?? 0,
