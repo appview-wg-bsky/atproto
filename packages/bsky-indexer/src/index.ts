@@ -28,6 +28,7 @@ import {
 import { WriteOpAction } from '@atproto/repo'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
+import { subLogger } from '@atproto/bsky/dist/logger'
 
 const MIN_WORKERS = 5
 const MAX_WORKERS = 20
@@ -49,9 +50,11 @@ interface TrackedEvent {
   reject: (err: Error) => void
 }
 
-export interface IndexerOptions extends Omit<FirehoseOptions, 'idResolver'> {
+export interface IndexerOptions
+  extends Partial<Omit<FirehoseOptions, 'idResolver'>> {
   identityResolverOptions?: IdentityResolverOpts
   databaseOptions: ConstructorParameters<typeof Database>[0]
+  onError?: (err: Error) => void
 }
 
 export class AppViewIndexer {
@@ -76,6 +79,9 @@ export class AppViewIndexer {
       throw new Error('Must set only `getCursor` or `runner`')
     }
 
+    this.opts.onError ??= (err) =>
+      subLogger.error({ err }, 'error in subscription')
+
     if (cluster.isPrimary) {
       this.initializePrimary()
     } else {
@@ -98,7 +104,7 @@ export class AppViewIndexer {
           this.lastEventTimestamp = message.timestamp
         }
         if (message.error) {
-          this.opts.onError(message.error)
+          this.opts.onError?.(message.error)
         }
       } else if (message.type === 'tracked-complete' && message.eventId) {
         const tracked = this.trackedEvents.get(message.eventId)
@@ -141,7 +147,7 @@ export class AppViewIndexer {
         try {
           return isValidRepoEvent(value)
         } catch (err) {
-          this.opts.onError(new FirehoseValidationError(err, value))
+          this.opts.onError?.(new FirehoseValidationError(err, value))
         }
       },
     })
@@ -254,7 +260,7 @@ export class AppViewIndexer {
           ])
         }
       } catch (err) {
-        this.opts.onError(new FirehoseHandlerError(err, write))
+        this.opts.onError?.(new FirehoseHandlerError(err, write))
       }
     }
 
@@ -279,11 +285,17 @@ export class AppViewIndexer {
     const workerCount = this.workers.size
 
     if (currentSkew > MAX_ACCEPTABLE_SKEW && workerCount < MAX_WORKERS) {
+      subLogger.info(
+        `scaling up to ${workerCount} workers with skew ${(currentSkew / 1000).toFixed(1)}s`,
+      )
       this.spawnWorker()
     } else if (
       currentSkew < MAX_ACCEPTABLE_SKEW / 2 &&
       workerCount > MIN_WORKERS
     ) {
+      subLogger.info(
+        `scaling down to ${workerCount} workers with skew ${(currentSkew / 1000).toFixed(1)}s`,
+      )
       this.terminateWorker()
     }
   }
@@ -341,7 +353,7 @@ export class AppViewIndexer {
         this.destroyDefer.resolve()
         return
       }
-      this.opts.onError(new FirehoseSubscriptionError(err))
+      this.opts.onError?.(new FirehoseSubscriptionError(err))
       await wait(this.opts.subscriptionReconnectDelay ?? 3000)
       return this.start()
     }
