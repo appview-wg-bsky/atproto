@@ -1,0 +1,35 @@
+{
+  "name": "@futuristick/bsky-indexer",
+  "version": "0.0.112",
+  "license": "MIT",
+  "description": "Ingests relay data into the Bluesky AppView.",
+  "keywords": [
+    "atproto",
+    "bluesky"
+  ],
+  "homepage": "https://zeppelin.social",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/appview-wg-bsky/atproto",
+    "directory": "packages/bsky-indexer"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "start": "node --enable-source-maps dist/bin.js"
+  },
+  "dependencies": {
+    "@atproto/bsky": "workspace:^",
+    "@atproto/common": "workspace:^",
+    "@atproto/identity": "workspace:^",
+    "@atproto/lexicon": "workspace:^",
+    "@atproto/repo": "workspace:^",
+    "@atproto/xrpc-server": "workspace:^",
+    "@atproto/sync": "workspace:^",
+    "multiformats": "^9.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
