@@ -1833,9 +1833,6 @@ importers:
       '@atproto/crypto':
         specifier: workspace:^
         version: link:../../packages/crypto
-      '@atproto/identity':
-        specifier: workspace:^
-        version: link:../../packages/identity
       dd-trace:
         specifier: 3.13.2
         version: 3.13.2
