@@ -1,0 +1,9 @@
+{
+  "name": "bsky-app-view-indexer",
+  "private": true,
+  "packageManager": "pnpm@8.15.9",
+  "dependencies": {
+    "@futuristick/bsky-indexer": "workspace:^",
+    "@atproto/bsky": "workspace:^"
+  }
+}
