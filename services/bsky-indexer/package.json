@@ -3,7 +3,6 @@
   "private": true,
   "packageManager": "pnpm@8.15.9",
   "dependencies": {
-    "@futuristick/bsky-indexer": "workspace:^",
-    "@atproto/bsky": "workspace:^"
+    "@futuristick/bsky-indexer": "workspace:^"
   }
 }

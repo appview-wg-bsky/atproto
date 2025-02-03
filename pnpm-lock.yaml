@@ -1842,9 +1842,6 @@ importers:
 
   services/bsky-indexer:
     dependencies:
-      '@atproto/bsky':
-        specifier: workspace:^
-        version: link:../../packages/bsky
       '@futuristick/bsky-indexer':
         specifier: workspace:^
         version: link:../../packages/bsky-indexer
