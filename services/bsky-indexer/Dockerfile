@@ -12,6 +12,7 @@ COPY ./*.* ./
 # NOTE bsky's transitive dependencies go here: if that changes, this needs to be updated.
 COPY ./tsconfig ./tsconfig
 COPY ./packages/bsky ./packages/bsky
+COPY ./packages/bsky-indexer ./packages/bsky-indexer
 COPY ./packages/api ./packages/api
 COPY ./packages/common ./packages/common
 COPY ./packages/common-web ./packages/common-web
@@ -28,7 +29,7 @@ COPY ./packages/internal/fetch-node ./packages/internal/fetch-node
 COPY ./packages/internal/fetch ./packages/internal/fetch
 COPY ./packages/internal/pipe ./packages/internal/pipe
 COPY ./packages/internal/xrpc-utils ./packages/internal/xrpc-utils
-COPY ./services/indexer ./services/indexer
+COPY ./services/bsky-indexer ./services/bsky-indexer
 
 # install all deps
 RUN pnpm install --frozen-lockfile > /dev/null
@@ -39,7 +40,7 @@ RUN rm -rf node_modules
 # install only prod deps, hoisted to root node_modules dir
 RUN pnpm install --prod --shamefully-hoist --frozen-lockfile --prefer-offline > /dev/null
 
-WORKDIR services/indexer
+WORKDIR services/bsky-indexer
 
 # Uses assets from build stage to reduce build size
 FROM node:20.11-alpine
@@ -52,7 +53,7 @@ RUN apk add --update dumb-init runit
 # Avoid zombie processes, handle signal forwarding
 ENTRYPOINT ["dumb-init", "--"]
 
-WORKDIR /app/services/indexer
+WORKDIR /app/services/bsky-indexer
 COPY --from=build /app /app
 
 EXPOSE 3000
