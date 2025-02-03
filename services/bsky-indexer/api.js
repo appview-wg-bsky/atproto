@@ -11,7 +11,7 @@ const main = async () => {
   const dbOptions = {
     url: env.dbPostgresUrl,
     schema: env.dbPostgresSchema,
-    poolSize: 1000,
+    poolSize: 400,
   }
 
   const idResolverOptions = { plcUrl: env.didPlcUrl }
