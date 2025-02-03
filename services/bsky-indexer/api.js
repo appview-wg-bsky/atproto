@@ -4,11 +4,9 @@
 'use strict'
 
 const { AppViewIndexer } = require('@futuristick/bsky-indexer')
-const { ServerConfig } = require('@atproto/bsky')
 
 const main = async () => {
   const env = getEnv()
-  const config = ServerConfig.readEnv()
 
   const dbOptions = {
     url: env.dbPostgresUrl,
@@ -16,7 +14,7 @@ const main = async () => {
     poolSize: 1000,
   }
 
-  const idResolverOptions = { plcUrl: config.didPlcUrl }
+  const idResolverOptions = { plcUrl: env.didPlcUrl }
 
   const sub = new AppViewIndexer({
     identityResolverOptions: idResolverOptions,
@@ -34,6 +32,8 @@ const getEnv = () => ({
   dbPostgresUrl: process.env.BSKY_DB_POSTGRES_URL || undefined,
   dbPostgresSchema: process.env.BSKY_DB_POSTGRES_SCHEMA || undefined,
   repoProvider: process.env.BSKY_REPO_PROVIDER || undefined,
+  didPlcUrl:
+    process.env.BSKY_DID_PLC_URL || process.env.DID_PLC_URL || undefined,
 })
 
 main()
