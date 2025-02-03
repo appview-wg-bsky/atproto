@@ -34,6 +34,7 @@ const MIN_WORKERS = 5
 const MAX_WORKERS = 20
 const SCALE_CHECK_INTERVAL = 5000
 const MAX_ACCEPTABLE_SKEW = 3000
+const MAX_EVENTS_PER_WORKER = 200
 
 interface WorkerMessage {
   type: 'ready' | 'processed' | 'tracked-complete'
@@ -50,6 +51,12 @@ interface TrackedEvent {
   reject: (err: Error) => void
 }
 
+interface WorkerState {
+  worker: Worker
+  activeEvents: number
+  lastEventTime: number
+}
+
 export interface IndexerOptions
   extends Partial<Omit<FirehoseOptions, 'idResolver'>> {
   identityResolverOptions?: IdentityResolverOpts
@@ -63,8 +70,7 @@ export class AppViewIndexer {
   private idResolver?: IdResolver
   private abortController: AbortController
   private destroyDefer: Deferrable
-  private workers: Map<number, Worker> = new Map()
-  private workerQueue: number[] = []
+  private workers: Map<number, WorkerState> = new Map()
   private eventsReceived = 0
   private eventsProcessed = 0
   private lastEventTimestamp = Date.now()
@@ -95,18 +101,21 @@ export class AppViewIndexer {
     }
 
     cluster.on('message', (worker, message: WorkerMessage) => {
-      if (message.type === 'ready') {
-        this.workerQueue.push(worker.id)
-      } else if (message.type === 'processed') {
+      const workerState = this.workers.get(worker.id)
+      if (!workerState) return
+
+      if (message.type === 'processed') {
+        workerState.activeEvents = Math.max(0, workerState.activeEvents - 1)
         this.eventsProcessed++
-        this.workerQueue.push(worker.id)
         if (message.timestamp) {
-          this.lastEventTimestamp = message.timestamp
+          workerState.lastEventTime = message.timestamp
+          this.updateLastEventTimestamp()
         }
         if (message.error) {
           this.opts.onError?.(message.error)
         }
       } else if (message.type === 'tracked-complete' && message.eventId) {
+        workerState.activeEvents = Math.max(0, workerState.activeEvents - 1)
         const tracked = this.trackedEvents.get(message.eventId)
         if (tracked) {
           if (message.error) {
@@ -116,13 +125,11 @@ export class AppViewIndexer {
           }
           this.trackedEvents.delete(message.eventId)
         }
-        this.workerQueue.push(worker.id)
       }
     })
 
     cluster.on('exit', (worker) => {
       this.workers.delete(worker.id)
-      this.workerQueue = this.workerQueue.filter((id) => id !== worker.id)
 
       if (!this.abortController.signal.aborted) {
         this.spawnWorker()
@@ -158,6 +165,28 @@ export class AppViewIndexer {
     )
   }
 
+  private updateLastEventTimestamp() {
+    this.lastEventTimestamp = Math.max(
+      ...Array.from(this.workers.values()).map((state) => state.lastEventTime),
+    )
+  }
+
+  private getNextAvailableWorker(): WorkerState | undefined {
+    let leastBusyWorker: WorkerState | undefined
+    let minActiveEvents = MAX_EVENTS_PER_WORKER
+
+    for (const state of this.workers.values()) {
+      if (state.activeEvents < minActiveEvents) {
+        minActiveEvents = state.activeEvents
+        leastBusyWorker = state
+      }
+    }
+
+    return (leastBusyWorker?.activeEvents ?? Infinity) < MAX_EVENTS_PER_WORKER
+      ? leastBusyWorker
+      : undefined
+  }
+
   private initializeWorker() {
     this.idResolver = new IdResolver({
       didCache: new MemoryCache(),
@@ -182,18 +211,122 @@ export class AppViewIndexer {
     if (this.workers.size >= MAX_WORKERS) return
 
     const worker = cluster.fork()
-    this.workers.set(worker.id, worker)
+    this.workers.set(worker.id, {
+      worker,
+      activeEvents: 0,
+      lastEventTime: Date.now(),
+    })
   }
 
   private terminateWorker() {
     if (this.workers.size <= MIN_WORKERS) return
 
-    const [workerId] = this.workers.keys()
-    const worker = this.workers.get(workerId)
-    if (worker) {
-      worker.kill()
-      this.workers.delete(workerId)
-      this.workerQueue = this.workerQueue.filter((id) => id !== workerId)
+    let workerToTerminate: [number, WorkerState] | undefined
+    let minActiveEvents = Infinity
+
+    for (const [id, state] of this.workers.entries()) {
+      if (state.activeEvents < minActiveEvents) {
+        minActiveEvents = state.activeEvents
+        workerToTerminate = [id, state]
+      }
+    }
+
+    if (workerToTerminate && workerToTerminate[1].activeEvents === 0) {
+      const [id, state] = workerToTerminate
+      state.worker.kill()
+      this.workers.delete(id)
+    }
+  }
+
+  private checkScaling() {
+    const currentSkew = Date.now() - this.lastEventTimestamp
+    const workerCount = this.workers.size
+    const totalActiveEvents = Array.from(this.workers.values()).reduce(
+      (sum, state) => sum + state.activeEvents,
+      0,
+    )
+    const avgEventsPerWorker = totalActiveEvents / workerCount
+
+    if (
+      (currentSkew > MAX_ACCEPTABLE_SKEW ||
+        avgEventsPerWorker > MAX_EVENTS_PER_WORKER * 0.8) &&
+      workerCount < MAX_WORKERS
+    ) {
+      subLogger.info(
+        `scaling up to ${workerCount + 1} workers with skew ${(
+          currentSkew / 1000
+        ).toFixed(1)}s and ${avgEventsPerWorker.toFixed(1)} events/worker`,
+      )
+      this.spawnWorker()
+    } else if (
+      currentSkew < MAX_ACCEPTABLE_SKEW / 2 &&
+      avgEventsPerWorker < MAX_EVENTS_PER_WORKER * 0.4 &&
+      workerCount > MIN_WORKERS
+    ) {
+      subLogger.info(
+        `scaling down to ${workerCount - 1} workers with skew ${(
+          currentSkew / 1000
+        ).toFixed(1)}s and ${avgEventsPerWorker.toFixed(1)} events/worker`,
+      )
+      this.terminateWorker()
+    }
+  }
+
+  private async sendToWorker(evt: RepoEvent, tracked = false): Promise<void> {
+    let workerState: WorkerState | undefined
+
+    while (!(workerState = this.getNextAvailableWorker())) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    workerState.activeEvents++
+
+    if (tracked) {
+      const eventId = Math.random().toString(36).slice(2)
+      return new Promise((resolve, reject) => {
+        this.trackedEvents.set(eventId, {
+          id: eventId,
+          evt,
+          resolve,
+          reject,
+        })
+        const evtWithId = {
+          ...evt,
+          __trackingId: eventId,
+        }
+        workerState!.worker.send(evtWithId)
+      })
+    } else {
+      workerState.worker.send(evt)
+    }
+  }
+
+  async start(): Promise<void> {
+    if (!cluster.isPrimary) return
+
+    try {
+      for await (const evt of this.sub) {
+        this.eventsReceived++
+
+        if (this.opts.runner) {
+          const parsed = didAndSeqForEvt(evt)
+          if (parsed) {
+            this.opts.runner.trackEvent(parsed.did, parsed.seq, async () => {
+              await this.sendToWorker(evt, true)
+            })
+          }
+        } else {
+          await this.sendToWorker(evt, false)
+        }
+      }
+    } catch (err) {
+      if (err && (err as any).name === 'AbortError') {
+        this.destroyDefer.resolve()
+        return
+      }
+      this.opts.onError?.(new FirehoseSubscriptionError(err))
+      await wait(this.opts.subscriptionReconnectDelay ?? 3000)
+      return this.start()
     }
   }
 
@@ -280,85 +413,6 @@ export class AppViewIndexer {
     }
   }
 
-  private checkScaling() {
-    const currentSkew = Date.now() - this.lastEventTimestamp
-    const workerCount = this.workers.size
-
-    if (currentSkew > MAX_ACCEPTABLE_SKEW && workerCount < MAX_WORKERS) {
-      subLogger.info(
-        `scaling up to ${workerCount} workers with skew ${(currentSkew / 1000).toFixed(1)}s`,
-      )
-      this.spawnWorker()
-    } else if (
-      currentSkew < MAX_ACCEPTABLE_SKEW / 2 &&
-      workerCount > MIN_WORKERS
-    ) {
-      subLogger.info(
-        `scaling down to ${workerCount} workers with skew ${(currentSkew / 1000).toFixed(1)}s`,
-      )
-      this.terminateWorker()
-    }
-  }
-
-  private async sendToWorker(evt: RepoEvent, tracked = false): Promise<void> {
-    while (this.workerQueue.length === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-
-    const workerId = this.workerQueue.shift()!
-    const worker = this.workers.get(workerId)
-
-    if (worker) {
-      if (tracked) {
-        const eventId = Math.random().toString(36).slice(2)
-        return new Promise((resolve, reject) => {
-          this.trackedEvents.set(eventId, {
-            id: eventId,
-            evt,
-            resolve,
-            reject,
-          })
-          const evtWithId = {
-            ...evt,
-            __trackingId: eventId,
-          }
-          worker.send(evtWithId)
-        })
-      } else {
-        worker.send(evt)
-      }
-    }
-  }
-
-  async start(): Promise<void> {
-    if (!cluster.isPrimary) return
-
-    try {
-      for await (const evt of this.sub) {
-        this.eventsReceived++
-
-        if (this.opts.runner) {
-          const parsed = didAndSeqForEvt(evt)
-          if (parsed) {
-            this.opts.runner.trackEvent(parsed.did, parsed.seq, async () => {
-              await this.sendToWorker(evt, true)
-            })
-          }
-        } else {
-          await this.sendToWorker(evt, false)
-        }
-      }
-    } catch (err) {
-      if (err && (err as any).name === 'AbortError') {
-        this.destroyDefer.resolve()
-        return
-      }
-      this.opts.onError?.(new FirehoseSubscriptionError(err))
-      await wait(this.opts.subscriptionReconnectDelay ?? 3000)
-      return this.start()
-    }
-  }
-
   private async parseEvt(evt: RepoEvent): Promise<Event[]> {
     if (isCommit(evt) && !this.opts.excludeCommit) {
       return this.opts.unauthenticatedCommits
@@ -390,7 +444,7 @@ export class AppViewIndexer {
       clearInterval(this.scalingInterval)
     }
 
-    for (const worker of this.workers.values()) {
+    for (const { worker } of this.workers.values()) {
       worker.kill()
     }
 
