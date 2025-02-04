@@ -14,12 +14,14 @@ const main = async () => {
     poolSize: 400,
   }
 
-  const idResolverOptions = { plcUrl: env.didPlcUrl }
+  const idResolverOptions = { plcUrl: env.didPlcUrl, timeout: 10_000 }
 
   const sub = new AppViewIndexer({
     identityResolverOptions: idResolverOptions,
     databaseOptions: dbOptions,
     service: env.repoProvider,
+    unauthenticatedHandles: true,
+    unauthenticatedCommits: true,
   })
 
   sub.start()
