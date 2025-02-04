@@ -19,6 +19,8 @@ import {
   parseIdentity,
   FirehoseParseError,
   FirehoseValidationError,
+  MemoryRunner,
+  EventRunner,
 } from '@atproto/sync'
 import {
   IdentityResolverOpts,
@@ -68,6 +70,7 @@ export class AppViewIndexer {
   private sub!: Subscription<RepoEvent>
   private indexingSvc?: IndexingService
   private idResolver?: IdResolver
+  private runner?: EventRunner
   private abortController: AbortController
   private destroyDefer: Deferrable
   private workers: Map<number, WorkerState> = new Map()
@@ -85,6 +88,7 @@ export class AppViewIndexer {
       throw new Error('Must set only `getCursor` or `runner`')
     }
 
+    if (this.opts.runner) this.runner = this.opts.runner
     this.opts.onError ??= (err) =>
       subLogger.error({ err }, 'error in subscription')
 
@@ -99,6 +103,8 @@ export class AppViewIndexer {
     for (let i = 0; i < MIN_WORKERS; i++) {
       this.spawnWorker()
     }
+
+    this.runner = new MemoryRunner()
 
     cluster.on('message', (worker, message: WorkerMessage) => {
       const workerState = this.workers.get(worker.id)
@@ -143,7 +149,7 @@ export class AppViewIndexer {
       signal: this.abortController.signal,
       getParams: async () => {
         const getCursorFn = () =>
-          this.opts.runner?.getCursor() ?? this.opts.getCursor?.()
+          this.runner?.getCursor() ?? this.opts.getCursor?.()
         if (!getCursorFn) {
           return undefined
         }
@@ -308,10 +314,10 @@ export class AppViewIndexer {
       for await (const evt of this.sub) {
         this.eventsReceived++
 
-        if (this.opts.runner) {
+        if (this.runner) {
           const parsed = didAndSeqForEvt(evt)
           if (parsed) {
-            this.opts.runner.trackEvent(parsed.did, parsed.seq, async () => {
+            this.runner.trackEvent(parsed.did, parsed.seq, async () => {
               await this.sendToWorker(evt, true)
             })
           }
