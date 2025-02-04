@@ -1,26 +1,25 @@
 import cluster, { Worker } from 'node:cluster'
 import { createDeferrable, Deferrable, wait } from '@atproto/common'
-import { Subscription } from '@atproto/xrpc-server'
+import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
 import {
-  RepoEvent,
-  isValidRepoEvent,
   isAccount,
   isCommit,
   isIdentity,
+  isValidRepoEvent,
+  RepoEvent,
 } from './lexicons'
 import {
   Event,
-  FirehoseOptions,
-  FirehoseSubscriptionError,
+  EventRunner,
   FirehoseHandlerError,
-  parseCommitUnauthenticated,
-  parseCommitAuthenticated,
-  parseAccount,
-  parseIdentity,
   FirehoseParseError,
+  FirehoseSubscriptionError,
   FirehoseValidationError,
   MemoryRunner,
-  EventRunner,
+  parseAccount,
+  parseCommitAuthenticated,
+  parseCommitUnauthenticated,
+  parseIdentity,
 } from '@atproto/sync'
 import {
   IdentityResolverOpts,
@@ -30,7 +29,8 @@ import {
 import { WriteOpAction } from '@atproto/repo'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
-import { subLogger } from '@atproto/bsky/dist/logger'
+import { ensureChunkIsMessage } from '@atproto/xrpc-server'
+import type { FirehoseOptions } from '@atproto/sync'
 
 const MIN_WORKERS = 5
 const MAX_WORKERS = 20
@@ -38,17 +38,28 @@ const SCALE_CHECK_INTERVAL = 5000
 const MAX_ACCEPTABLE_SKEW = 3000
 const MAX_EVENTS_PER_WORKER = 200
 
-interface WorkerMessage {
-  type: 'ready' | 'processed' | 'tracked-complete'
-  workerId: number
-  timestamp?: number
-  error?: Error
-  eventId?: string
-}
+type WorkerMessage =
+  | { type: 'ready'; workerId: number }
+  | {
+      type: 'processed'
+      workerId: number
+      eventId: string
+      timestamp: number
+    }
+  | {
+      type: 'processed'
+      workerId: number
+      eventId: string
+      error: Error
+    }
+  | {
+      type: 'status'
+      workerId: number
+      activeEventCount: number
+    }
 
 interface TrackedEvent {
   id: string
-  evt: RepoEvent
   resolve: () => void
   reject: (err: Error) => void
 }
@@ -57,6 +68,7 @@ interface WorkerState {
   worker: Worker
   activeEvents: number
   lastEventTime: number
+  terminated: boolean
 }
 
 export interface IndexerOptions
@@ -67,15 +79,14 @@ export interface IndexerOptions
 }
 
 export class AppViewIndexer {
-  private sub!: Subscription<RepoEvent>
+  private sub!: WebSocketKeepAlive
   private indexingSvc?: IndexingService
   private idResolver?: IdResolver
-  private runner?: EventRunner
+  private runner!: EventRunner
   private abortController: AbortController
   private destroyDefer: Deferrable
   private workers: Map<number, WorkerState> = new Map()
   private eventsReceived = 0
-  private eventsProcessed = 0
   private lastEventTimestamp = Date.now()
   private scalingInterval: NodeJS.Timeout | null = null
   private trackedEvents: Map<string, TrackedEvent> = new Map()
@@ -90,7 +101,8 @@ export class AppViewIndexer {
 
     if (this.opts.runner) this.runner = this.opts.runner
     this.opts.onError ??= (err) =>
-      subLogger.error({ err }, 'error in subscription')
+      // @ts-expect-error
+      console.error(err.message, err.cause?.message ?? 'error in subscription')
 
     if (cluster.isPrimary) {
       this.initializePrimary()
@@ -104,64 +116,57 @@ export class AppViewIndexer {
       this.spawnWorker()
     }
 
-    this.runner = new MemoryRunner()
+    this.runner ??= new MemoryRunner()
 
     cluster.on('message', (worker, message: WorkerMessage) => {
       const workerState = this.workers.get(worker.id)
       if (!workerState) return
 
-      if (message.type === 'processed') {
-        workerState.activeEvents = Math.max(0, workerState.activeEvents - 1)
-        this.eventsProcessed++
-        if (message.timestamp) {
+      if (message.type === 'ready') {
+        console.log(`worker ${worker.id} ready`)
+      } else if (message.type === 'processed' && message.eventId) {
+        if ('timestamp' in message) {
           workerState.lastEventTime = message.timestamp
-          this.updateLastEventTimestamp()
+          this.updateLastEventTimestamp(message.timestamp)
         }
-        if (message.error) {
-          this.opts.onError?.(message.error)
-        }
-      } else if (message.type === 'tracked-complete' && message.eventId) {
-        workerState.activeEvents = Math.max(0, workerState.activeEvents - 1)
+
         const tracked = this.trackedEvents.get(message.eventId)
         if (tracked) {
-          if (message.error) {
+          if ('error' in message) {
             tracked.reject(message.error)
           } else {
             tracked.resolve()
           }
           this.trackedEvents.delete(message.eventId)
         }
+      } else if (message.type === 'status') {
+        const workerState = this.workers.get(message.workerId)
+        if (workerState) workerState.activeEvents = message.activeEventCount
       }
     })
 
     cluster.on('exit', (worker) => {
       this.workers.delete(worker.id)
 
-      if (!this.abortController.signal.aborted) {
+      if (!this.abortController?.signal.aborted) {
         this.spawnWorker()
       }
     })
 
-    this.sub = new Subscription({
-      ...this.opts,
-      service: this.opts.service ?? 'wss://bsky.network',
-      method: 'com.atproto.sync.subscribeRepos',
+    console.log('initializing subscription')
+
+    this.sub = new WebSocketKeepAlive({
       signal: this.abortController.signal,
-      getParams: async () => {
+      heartbeatIntervalMs: 10_000,
+      getUrl: async () => {
         const getCursorFn = () =>
           this.runner?.getCursor() ?? this.opts.getCursor?.()
-        if (!getCursorFn) {
-          return undefined
-        }
+        let url = `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos`
         const cursor = await getCursorFn()
-        return { cursor }
-      },
-      validate: (value: unknown) => {
-        try {
-          return isValidRepoEvent(value)
-        } catch (err) {
-          this.opts.onError?.(new FirehoseValidationError(err, value))
+        if (cursor !== undefined) {
+          url += `?cursor=${cursor}`
         }
+        return url
       },
     })
 
@@ -171,10 +176,13 @@ export class AppViewIndexer {
     )
   }
 
-  private updateLastEventTimestamp() {
-    this.lastEventTimestamp = Math.max(
-      ...Array.from(this.workers.values()).map((state) => state.lastEventTime),
-    )
+  private updateLastEventTimestamp(timestamp: number) {
+    if (
+      this.lastEventTimestamp === undefined ||
+      timestamp > this.lastEventTimestamp
+    ) {
+      this.lastEventTimestamp = timestamp
+    }
   }
 
   private getNextAvailableWorker(): WorkerState | undefined {
@@ -182,6 +190,7 @@ export class AppViewIndexer {
     let minActiveEvents = MAX_EVENTS_PER_WORKER
 
     for (const state of this.workers.values()) {
+      if (state.terminated) continue
       if (state.activeEvents < minActiveEvents) {
         minActiveEvents = state.activeEvents
         leastBusyWorker = state
@@ -205,7 +214,39 @@ export class AppViewIndexer {
       new BackgroundQueue(db),
     )
 
-    process.on('message', this.workerHandleEvent.bind(this))
+    let activeEventCount = 0
+
+    process.on('message', async (msg) => {
+      if (
+        !msg ||
+        typeof msg !== 'object' ||
+        !('chunk' in msg) ||
+        !Array.isArray(msg.chunk) ||
+        msg.chunk.length === 0 ||
+        !('eventId' in msg) ||
+        typeof msg.eventId !== 'string'
+      ) {
+        this.opts.onError?.(new Error('received invalid message'))
+        return
+      }
+
+      activeEventCount++
+
+      const evt = await this.parseEvtBytes(Uint8Array.from(msg.chunk))
+      if (!evt) {
+        activeEventCount--
+        return
+      }
+
+      void this.workerHandleEvent(evt, msg.eventId).finally(() => {
+        activeEventCount--
+        process.send?.({
+          type: 'status',
+          workerId: cluster.worker!.id,
+          activeEventCount,
+        })
+      })
+    })
 
     process.send?.({
       type: 'ready',
@@ -221,6 +262,7 @@ export class AppViewIndexer {
       worker,
       activeEvents: 0,
       lastEventTime: Date.now(),
+      terminated: false,
     })
   }
 
@@ -241,35 +283,51 @@ export class AppViewIndexer {
       const [id, state] = workerToTerminate
       state.worker.kill()
       this.workers.delete(id)
+    } else if (workerToTerminate) {
+      const [id, state] = workerToTerminate
+      state.terminated = true
+      setInterval(() => {
+        if (state.activeEvents === 0) {
+          state.worker.kill()
+          this.workers.delete(id)
+        }
+      }, 1000)
+    } else {
+      console.warn('no workers to terminate')
     }
   }
 
   private checkScaling() {
     const currentSkew = Date.now() - this.lastEventTimestamp
+    const currentSkewStr = (currentSkew / 1000).toFixed(1) + 's'
     const workerCount = this.workers.size
     const totalActiveEvents = Array.from(this.workers.values()).reduce(
       (sum, state) => sum + state.activeEvents,
       0,
     )
     const avgEventsPerWorker = totalActiveEvents / workerCount
+    const avgEventsStr = avgEventsPerWorker.toFixed(1)
 
     if (
-      (currentSkew > MAX_ACCEPTABLE_SKEW ||
-        avgEventsPerWorker > MAX_EVENTS_PER_WORKER * 0.8) &&
-      workerCount < MAX_WORKERS
+      currentSkew > MAX_ACCEPTABLE_SKEW ||
+      avgEventsPerWorker > MAX_EVENTS_PER_WORKER * 0.75
     ) {
-      subLogger.info(
-        `scaling up to ${workerCount + 1} workers with skew ${(
-          currentSkew / 1000
-        ).toFixed(1)}s and ${avgEventsPerWorker.toFixed(1)} events/worker`,
-      )
-      this.spawnWorker()
+      if (workerCount < MAX_WORKERS) {
+        console.log(
+          `scaling up to ${workerCount + 1} workers with skew ${currentSkewStr} and ${avgEventsStr} events/worker`,
+        )
+        this.spawnWorker()
+      } else {
+        console.warn(
+          `skew is ${currentSkewStr} and ${avgEventsStr} events/worker, but max workers reached`,
+        )
+      }
     } else if (
-      currentSkew < MAX_ACCEPTABLE_SKEW / 2 &&
-      avgEventsPerWorker < MAX_EVENTS_PER_WORKER * 0.4 &&
+      (currentSkew < MAX_ACCEPTABLE_SKEW / 2 ||
+        avgEventsPerWorker < MAX_EVENTS_PER_WORKER * 0.4) &&
       workerCount > MIN_WORKERS
     ) {
-      subLogger.info(
+      console.log(
         `scaling down to ${workerCount - 1} workers with skew ${(
           currentSkew / 1000
         ).toFixed(1)}s and ${avgEventsPerWorker.toFixed(1)} events/worker`,
@@ -278,51 +336,43 @@ export class AppViewIndexer {
     }
   }
 
-  private async sendToWorker(evt: RepoEvent, tracked = false): Promise<void> {
+  private async sendToWorker(chunk: Uint8Array): Promise<void> {
     let workerState: WorkerState | undefined
 
     while (!(workerState = this.getNextAvailableWorker())) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
 
-    workerState.activeEvents++
-
-    if (tracked) {
-      const eventId = Math.random().toString(36).slice(2)
-      return new Promise((resolve, reject) => {
-        this.trackedEvents.set(eventId, {
-          id: eventId,
-          evt,
-          resolve,
-          reject,
-        })
-        const evtWithId = {
-          ...evt,
-          __trackingId: eventId,
-        }
-        workerState!.worker.send(evtWithId)
+    const eventId = Math.random().toString(36).slice(2)
+    return new Promise((resolve, reject) => {
+      this.trackedEvents.set(eventId, {
+        id: eventId,
+        resolve,
+        reject,
       })
-    } else {
-      workerState.worker.send(evt)
-    }
+      const evt = {
+        chunk: [...chunk],
+        eventId,
+      }
+      workerState!.worker.send(evt)
+    })
   }
 
   async start(): Promise<void> {
     if (!cluster.isPrimary) return
 
     try {
-      for await (const evt of this.sub) {
+      for await (const chunk of this.sub) {
         this.eventsReceived++
 
-        if (this.runner) {
-          const parsed = didAndSeqForEvt(evt)
-          if (parsed) {
-            this.runner.trackEvent(parsed.did, parsed.seq, async () => {
-              await this.sendToWorker(evt, true)
-            })
-          }
-        } else {
-          await this.sendToWorker(evt, false)
+        const evt = await this.parseEvtBytes(chunk)
+        if (!evt) continue
+
+        const parsed = didAndSeqForEvt(evt)
+        if (parsed) {
+          void this.runner.trackEvent(parsed.did, parsed.seq, () =>
+            this.sendToWorker(chunk),
+          )
         }
       }
     } catch (err) {
@@ -336,28 +386,18 @@ export class AppViewIndexer {
     }
   }
 
-  private async workerHandleEvent(evt: RepoEvent) {
-    const eventId = (evt as any).__trackingId
+  private async workerHandleEvent(evt: RepoEvent, eventId: string) {
     let parsed: Event[]
 
     try {
       parsed = await this.parseEvt(evt)
     } catch (err) {
-      if (eventId) {
-        process.send?.({
-          type: 'tracked-complete',
-          workerId: cluster.worker!.id,
-          eventId,
-          error: new FirehoseParseError(err, evt),
-        })
-      } else {
-        process.send?.({
-          type: 'processed',
-          workerId: cluster.worker!.id,
-          timestamp: Date.now(),
-          error: new FirehoseParseError(err, evt),
-        })
-      }
+      process.send?.({
+        type: 'processed',
+        workerId: cluster.worker!.id,
+        eventId,
+        error: new FirehoseParseError(err, evt),
+      })
       return
     }
 
@@ -403,58 +443,79 @@ export class AppViewIndexer {
       }
     }
 
-    if (eventId) {
-      process.send?.({
-        type: 'tracked-complete',
-        workerId: cluster.worker!.id,
-        eventId,
-        timestamp: Date.now(),
-      })
-    } else {
-      process.send?.({
-        type: 'processed',
-        workerId: cluster.worker!.id,
-        timestamp: Date.now(),
-      })
+    process.send?.({
+      type: 'processed',
+      workerId: cluster.worker!.id,
+      eventId,
+      timestamp: Date.now(),
+    })
+  }
+
+  private async parseEvtBytes(
+    chunk: Uint8Array,
+  ): Promise<RepoEvent | undefined> {
+    const message = ensureChunkIsMessage(chunk)
+    const t = message.header.t
+    const clone = message.body !== undefined ? { ...message.body } : undefined
+    if (clone !== undefined && t !== undefined) {
+      // @ts-expect-error
+      clone['$type'] = t.startsWith('#')
+        ? 'com.atproto.sync.subscribeRepos' + t
+        : t
+    }
+
+    try {
+      return isValidRepoEvent(clone)
+    } catch (err) {
+      this.opts.onError?.(new FirehoseValidationError(err, clone))
     }
   }
 
   private async parseEvt(evt: RepoEvent): Promise<Event[]> {
-    if (isCommit(evt) && !this.opts.excludeCommit) {
-      return this.opts.unauthenticatedCommits
-        ? await parseCommitUnauthenticated(evt, this.opts.filterCollections)
-        : await parseCommitAuthenticated(
-            this.idResolver!,
-            evt,
-            this.opts.filterCollections,
-          )
-    } else if (isAccount(evt) && !this.opts.excludeAccount) {
-      const parsed = parseAccount(evt)
-      return parsed ? [parsed] : []
-    } else if (isIdentity(evt) && !this.opts.excludeIdentity) {
-      const parsed = await parseIdentity(
-        this.idResolver!,
-        evt,
-        this.opts.unauthenticatedHandles,
-      )
-      return parsed ? [parsed] : []
-    } else {
+    try {
+      if (isCommit(evt) && !this.opts.excludeCommit) {
+        return this.opts.unauthenticatedCommits
+          ? await parseCommitUnauthenticated(evt, this.opts.filterCollections)
+          : await parseCommitAuthenticated(
+              this.idResolver!,
+              evt,
+              this.opts.filterCollections,
+            )
+      } else if (isAccount(evt) && !this.opts.excludeAccount) {
+        const parsed = parseAccount(evt)
+        return parsed ? [parsed] : []
+      } else if (isIdentity(evt) && !this.opts.excludeIdentity) {
+        const parsed = await parseIdentity(
+          this.idResolver!,
+          evt,
+          this.opts.unauthenticatedHandles,
+        )
+        return parsed ? [parsed] : []
+      } else {
+        return []
+      }
+    } catch (err) {
+      this.opts.onError?.(new FirehoseParseError(err, evt))
       return []
     }
   }
 
   async destroy(): Promise<void> {
-    this.abortController.abort()
+    this.abortController?.abort()
 
     if (this.scalingInterval) {
       clearInterval(this.scalingInterval)
     }
 
-    for (const { worker } of this.workers.values()) {
-      worker.kill()
+    if (cluster.isPrimary) {
+      for (const { worker } of this.workers.values()) {
+        worker.kill()
+      }
+    } else {
+      this.destroyDefer?.resolve()
     }
 
-    await this.destroyDefer.complete
+    await this.destroyDefer?.complete
   }
 }
 
