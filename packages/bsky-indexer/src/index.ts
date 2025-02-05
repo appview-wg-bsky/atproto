@@ -52,11 +52,6 @@ type WorkerMessage =
       eventId: string
       error: Error
     }
-  | {
-      type: 'status'
-      workerId: number
-      activeEventCount: number
-    }
 
 interface TrackedEvent {
   id: string
@@ -130,6 +125,8 @@ export class AppViewIndexer {
           this.updateLastEventTimestamp(message.timestamp)
         }
 
+        workerState.activeEvents--
+
         const tracked = this.trackedEvents.get(message.eventId)
         if (tracked) {
           if ('error' in message) {
@@ -139,9 +136,6 @@ export class AppViewIndexer {
           }
           this.trackedEvents.delete(message.eventId)
         }
-      } else if (message.type === 'status') {
-        const workerState = this.workers.get(message.workerId)
-        if (workerState) workerState.activeEvents = message.activeEventCount
       }
     })
 
@@ -214,8 +208,6 @@ export class AppViewIndexer {
       new BackgroundQueue(db),
     )
 
-    let activeEventCount = 0
-
     process.on('message', async (msg) => {
       if (
         !msg ||
@@ -230,22 +222,10 @@ export class AppViewIndexer {
         return
       }
 
-      activeEventCount++
-
       const evt = await this.parseEvtBytes(Uint8Array.from(msg.chunk))
-      if (!evt) {
-        activeEventCount--
-        return
-      }
+      if (!evt) return
 
-      void this.workerHandleEvent(evt, msg.eventId).finally(() => {
-        activeEventCount--
-        process.send?.({
-          type: 'status',
-          workerId: cluster.worker!.id,
-          activeEventCount,
-        })
-      })
+      void this.workerHandleEvent(evt, msg.eventId)
     })
 
     process.send?.({
@@ -350,6 +330,7 @@ export class AppViewIndexer {
         resolve,
         reject,
       })
+      workerState!.activeEvents++
       const evt = {
         chunk: [...chunk],
         eventId,
