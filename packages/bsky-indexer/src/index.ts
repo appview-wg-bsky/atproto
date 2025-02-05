@@ -71,10 +71,11 @@ export interface IndexerOptions
   identityResolverOptions?: IdentityResolverOpts
   databaseOptions: ConstructorParameters<typeof Database>[0]
   onError?: (err: Error) => void
+  sub?: AsyncIterable<Uint8Array>
 }
 
 export class AppViewIndexer {
-  private sub!: WebSocketKeepAlive
+  private sub!: AsyncIterable<Uint8Array>
   private indexingSvc?: IndexingService
   private idResolver?: IdResolver
   private runner!: EventRunner
@@ -147,22 +148,26 @@ export class AppViewIndexer {
       }
     })
 
-    console.log('initializing subscription')
-
-    this.sub = new WebSocketKeepAlive({
-      signal: this.abortController.signal,
-      heartbeatIntervalMs: 10_000,
-      getUrl: async () => {
-        const getCursorFn = () =>
-          this.runner?.getCursor() ?? this.opts.getCursor?.()
-        let url = `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos`
-        const cursor = await getCursorFn()
-        if (cursor !== undefined) {
-          url += `?cursor=${cursor}`
-        }
-        return url
-      },
-    })
+    if (this.opts.sub) {
+      console.log('using provided subscription')
+      this.sub = this.opts.sub
+    } else {
+      console.log('initializing subscription')
+      this.sub = new WebSocketKeepAlive({
+        signal: this.abortController.signal,
+        heartbeatIntervalMs: 10_000,
+        getUrl: async () => {
+          const getCursorFn = () =>
+            this.runner?.getCursor() ?? this.opts.getCursor?.()
+          let url = `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos`
+          const cursor = await getCursorFn()
+          if (cursor !== undefined) {
+            url += `?cursor=${cursor}`
+          }
+          return url
+        },
+      })
+    }
 
     this.scalingInterval = setInterval(
       () => this.checkScaling(),
