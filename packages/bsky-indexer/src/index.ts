@@ -34,8 +34,8 @@ import type { FirehoseOptions } from '@atproto/sync'
 
 const MIN_WORKERS = 5
 const MAX_WORKERS = 20
-const SCALE_CHECK_INTERVAL = 5000
-const MAX_ACCEPTABLE_SKEW = 3000
+const SCALE_CHECK_INTERVAL = 10_000
+const MAX_ACCEPTABLE_SKEW = 3_000
 const MAX_EVENTS_PER_WORKER = 200
 
 type WorkerMessage =
@@ -288,10 +288,7 @@ export class AppViewIndexer {
     const avgEventsPerWorker = totalActiveEvents / workerCount
     const avgEventsStr = avgEventsPerWorker.toFixed(1)
 
-    if (
-      currentSkew > MAX_ACCEPTABLE_SKEW ||
-      avgEventsPerWorker > MAX_EVENTS_PER_WORKER * 0.75
-    ) {
+    if (currentSkew > MAX_ACCEPTABLE_SKEW) {
       if (workerCount < MAX_WORKERS) {
         console.log(
           `scaling up to ${workerCount + 1} workers with skew ${currentSkewStr} and ${avgEventsStr} events/worker`,
@@ -303,14 +300,11 @@ export class AppViewIndexer {
         )
       }
     } else if (
-      (currentSkew < MAX_ACCEPTABLE_SKEW / 2 ||
-        avgEventsPerWorker < MAX_EVENTS_PER_WORKER * 0.4) &&
+      currentSkew < MAX_ACCEPTABLE_SKEW / 2 &&
       workerCount > MIN_WORKERS
     ) {
       console.log(
-        `scaling down to ${workerCount - 1} workers with skew ${(
-          currentSkew / 1000
-        ).toFixed(1)}s and ${avgEventsPerWorker.toFixed(1)} events/worker`,
+        `scaling down to ${workerCount - 1} workers with skew ${currentSkewStr} and ${avgEventsStr} events/worker`,
       )
       this.terminateWorker()
     }
