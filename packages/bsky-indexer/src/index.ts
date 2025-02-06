@@ -72,6 +72,8 @@ export interface IndexerOptions
   databaseOptions: ConstructorParameters<typeof Database>[0]
   onError?: (err: Error) => void
   sub?: AsyncIterable<Uint8Array>
+  minWorkers?: number
+  maxWorkers?: number
 }
 
 export class AppViewIndexer {
@@ -82,10 +84,11 @@ export class AppViewIndexer {
   private abortController: AbortController
   private destroyDefer: Deferrable
   private workers: Map<number, WorkerState> = new Map()
-  private eventsReceived = 0
   private lastEventTimestamp = Date.now()
   private scalingInterval: NodeJS.Timeout | null = null
   private trackedEvents: Map<string, TrackedEvent> = new Map()
+  private minWorkers: number
+  private maxWorkers: number
 
   constructor(public opts: IndexerOptions) {
     this.destroyDefer = createDeferrable()
@@ -100,6 +103,9 @@ export class AppViewIndexer {
       // @ts-expect-error
       console.error(err.message, err.cause?.message ?? 'error in subscription')
 
+    this.minWorkers = this.opts.minWorkers ?? MIN_WORKERS
+    this.maxWorkers = this.opts.maxWorkers ?? MAX_WORKERS
+
     if (cluster.isPrimary) {
       this.initializePrimary()
     } else {
@@ -108,7 +114,7 @@ export class AppViewIndexer {
   }
 
   private initializePrimary() {
-    for (let i = 0; i < MIN_WORKERS; i++) {
+    for (let i = 0; i < this.minWorkers; i++) {
       this.spawnWorker()
     }
 
@@ -252,7 +258,7 @@ export class AppViewIndexer {
   }
 
   private terminateWorker() {
-    if (this.workers.size <= MIN_WORKERS) return
+    if (this.workers.size <= this.minWorkers) return
 
     let workerToTerminate: [number, WorkerState] | undefined
     let minActiveEvents = Infinity
@@ -294,7 +300,7 @@ export class AppViewIndexer {
     const avgEventsStr = avgEventsPerWorker.toFixed(1)
 
     if (currentSkew > MAX_ACCEPTABLE_SKEW) {
-      if (workerCount < MAX_WORKERS) {
+      if (workerCount < this.maxWorkers) {
         console.log(
           `scaling up to ${workerCount + 1} workers with skew ${currentSkewStr} and ${avgEventsStr} events/worker`,
         )
@@ -306,7 +312,7 @@ export class AppViewIndexer {
       }
     } else if (
       currentSkew < MAX_ACCEPTABLE_SKEW / 2 &&
-      workerCount > MIN_WORKERS
+      workerCount > this.minWorkers
     ) {
       console.log(
         `scaling down to ${workerCount - 1} workers with skew ${currentSkewStr} and ${avgEventsStr} events/worker`,
@@ -343,8 +349,6 @@ export class AppViewIndexer {
 
     try {
       for await (const chunk of this.sub) {
-        this.eventsReceived++
-
         const evt = await this.parseEvtBytes(chunk)
         if (!evt) continue
 
