@@ -77,18 +77,18 @@ export interface IndexerOptions
 }
 
 export class AppViewIndexer {
-  private sub!: AsyncIterable<Uint8Array>
-  private indexingSvc?: IndexingService
-  private idResolver?: IdResolver
-  private runner!: EventRunner
-  private abortController: AbortController
-  private destroyDefer: Deferrable
-  private workers: Map<number, WorkerState> = new Map()
-  private lastEventTimestamp = Date.now()
-  private scalingInterval: NodeJS.Timeout | null = null
-  private trackedEvents: Map<string, TrackedEvent> = new Map()
-  private minWorkers: number
-  private maxWorkers: number
+  protected sub!: AsyncIterable<Uint8Array>
+  protected indexingSvc?: IndexingService
+  protected idResolver?: IdResolver
+  protected runner!: EventRunner
+  protected abortController: AbortController
+  protected destroyDefer: Deferrable
+  protected workers: Map<number, WorkerState> = new Map()
+  protected lastEventTimestamp = Date.now()
+  protected scalingInterval: NodeJS.Timeout | null = null
+  protected trackedEvents: Map<string, TrackedEvent> = new Map()
+  protected minWorkers: number
+  protected maxWorkers: number
 
   constructor(public opts: IndexerOptions) {
     this.destroyDefer = createDeferrable()
@@ -113,7 +113,7 @@ export class AppViewIndexer {
     }
   }
 
-  private initializePrimary() {
+  protected initializePrimary() {
     for (let i = 0; i < this.minWorkers; i++) {
       this.spawnWorker()
     }
@@ -181,7 +181,7 @@ export class AppViewIndexer {
     )
   }
 
-  private updateLastEventTimestamp(timestamp: number) {
+  protected updateLastEventTimestamp(timestamp: number) {
     if (
       this.lastEventTimestamp === undefined ||
       timestamp > this.lastEventTimestamp
@@ -190,7 +190,7 @@ export class AppViewIndexer {
     }
   }
 
-  private getNextAvailableWorker(): WorkerState | undefined {
+  protected getNextAvailableWorker(): WorkerState | undefined {
     let leastBusyWorker: WorkerState | undefined
     let minActiveEvents = MAX_EVENTS_PER_WORKER
 
@@ -207,7 +207,7 @@ export class AppViewIndexer {
       : undefined
   }
 
-  private initializeWorker() {
+  protected initializeWorker() {
     this.idResolver = new IdResolver({
       didCache: new MemoryCache(),
       ...(this.opts.identityResolverOptions ?? {}),
@@ -245,7 +245,7 @@ export class AppViewIndexer {
     })
   }
 
-  private spawnWorker() {
+  protected spawnWorker() {
     if (this.workers.size >= MAX_WORKERS) return
 
     const worker = cluster.fork()
@@ -257,7 +257,7 @@ export class AppViewIndexer {
     })
   }
 
-  private terminateWorker() {
+  protected terminateWorker() {
     if (this.workers.size <= this.minWorkers) return
 
     let workerToTerminate: [number, WorkerState] | undefined
@@ -288,7 +288,7 @@ export class AppViewIndexer {
     }
   }
 
-  private checkScaling() {
+  protected checkScaling() {
     const currentSkew = Date.now() - this.lastEventTimestamp
     const currentSkewStr = (currentSkew / 1000).toFixed(1) + 's'
     const workerCount = this.workers.size
@@ -321,7 +321,7 @@ export class AppViewIndexer {
     }
   }
 
-  private async sendToWorker(chunk: Uint8Array): Promise<void> {
+  protected async sendToWorker(chunk: Uint8Array): Promise<void> {
     let workerState: WorkerState | undefined
 
     while (!(workerState = this.getNextAvailableWorker())) {
@@ -370,7 +370,7 @@ export class AppViewIndexer {
     }
   }
 
-  private async workerHandleEvent(evt: RepoEvent, eventId: string) {
+  protected async workerHandleEvent(evt: RepoEvent, eventId: string) {
     let parsed: Event[]
 
     try {
@@ -435,7 +435,7 @@ export class AppViewIndexer {
     })
   }
 
-  private async parseEvtBytes(
+  protected async parseEvtBytes(
     chunk: Uint8Array,
   ): Promise<RepoEvent | undefined> {
     const message = ensureChunkIsMessage(chunk)
@@ -455,7 +455,7 @@ export class AppViewIndexer {
     }
   }
 
-  private async parseEvt(evt: RepoEvent): Promise<Event[]> {
+  protected async parseEvt(evt: RepoEvent): Promise<Event[]> {
     try {
       if (isCommit(evt) && !this.opts.excludeCommit) {
         return this.opts.unauthenticatedCommits
