@@ -11,7 +11,7 @@ const main = async () => {
   const dbOptions = {
     url: env.dbPostgresUrl,
     schema: env.dbPostgresSchema,
-    poolSize: 400,
+    poolSize: env.poolSize ?? 200,
   }
 
   const idResolverOptions = { plcUrl: env.didPlcUrl, timeout: 10_000 }
@@ -36,6 +36,7 @@ const getEnv = () => ({
   repoProvider: process.env.BSKY_REPO_PROVIDER || undefined,
   didPlcUrl:
     process.env.BSKY_DID_PLC_URL || process.env.DID_PLC_URL || undefined,
+  poolSize: process.env.WORKER_DB_POOL_SIZE || undefined,
 })
 
 main()
