@@ -85,6 +85,7 @@ export class AppViewIndexer {
   protected destroyDefer: Deferrable
   protected workers: Map<number, WorkerState> = new Map()
   protected lastEventTimestamp = Date.now()
+  protected skewDangerousSince: number | undefined
   protected scalingInterval: NodeJS.Timeout | null = null
   protected trackedEvents: Map<string, TrackedEvent> = new Map()
   protected minWorkers: number
@@ -299,25 +300,43 @@ export class AppViewIndexer {
     const avgEventsPerWorker = totalActiveEvents / workerCount
     const avgEventsStr = avgEventsPerWorker.toFixed(1)
 
+    // If skew is too high,
     if (currentSkew > MAX_ACCEPTABLE_SKEW) {
-      if (workerCount < this.maxWorkers) {
-        console.log(
-          `scaling up to ${workerCount + 1} workers with skew ${currentSkewStr} and ${avgEventsStr} events/worker`,
-        )
-        this.spawnWorker()
-      } else {
-        console.warn(
-          `skew is ${currentSkewStr} and ${avgEventsStr} events/worker, but max workers reached`,
-        )
+      // Take note of the last time it became dangerous, then wait and see if it stays dangerous
+      if (this.skewDangerousSince === undefined) {
+        this.skewDangerousSince = Date.now()
+        return
+      } else if (
+        // If it's been dangerous 3x the scaling check interval, try to scale up workers
+        Date.now() - this.skewDangerousSince >
+        3 * SCALE_CHECK_INTERVAL
+      ) {
+        this.skewDangerousSince = undefined
+        if (workerCount < this.maxWorkers) {
+          console.log(
+            `scaling up to ${workerCount + 1} workers with skew ${currentSkewStr} and ${avgEventsStr} events/worker`,
+          )
+          this.spawnWorker()
+        } else {
+          console.warn(
+            `skew is ${currentSkewStr} and ${avgEventsStr} events/worker, but max workers reached`,
+          )
+        }
       }
-    } else if (
-      currentSkew < MAX_ACCEPTABLE_SKEW / 2 &&
-      workerCount > this.minWorkers
-    ) {
-      console.log(
-        `scaling down to ${workerCount - 1} workers with skew ${currentSkewStr} and ${avgEventsStr} events/worker`,
-      )
-      this.terminateWorker()
+    } else {
+      // If skew isn't dangerous, reset the dangerous skew timer
+      this.skewDangerousSince = undefined
+      // If skew has gone down significantly and workers aren't overloaded, scale down
+      if (
+        currentSkew < MAX_ACCEPTABLE_SKEW / 2 &&
+        avgEventsPerWorker < MAX_EVENTS_PER_WORKER * 0.9 &&
+        workerCount > this.minWorkers
+      ) {
+        console.log(
+          `scaling down to ${workerCount - 1} workers with skew ${currentSkewStr} and ${avgEventsStr} events/worker`,
+        )
+        this.terminateWorker()
+      }
     }
   }
 
