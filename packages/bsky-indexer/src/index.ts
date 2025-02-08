@@ -10,7 +10,6 @@ import {
 } from './lexicons'
 import {
   Event,
-  EventRunner,
   FirehoseHandlerError,
   FirehoseParseError,
   FirehoseSubscriptionError,
@@ -68,6 +67,7 @@ interface WorkerState {
 
 export interface IndexerOptions
   extends Partial<Omit<FirehoseOptions, 'idResolver'>> {
+  runner?: MemoryRunner
   identityResolverOptions?: IdentityResolverOpts
   databaseOptions: ConstructorParameters<typeof Database>[0]
   onError?: (err: Error) => void
@@ -80,7 +80,7 @@ export class AppViewIndexer {
   protected sub!: AsyncIterable<Uint8Array>
   protected indexingSvc?: IndexingService
   protected idResolver?: IdResolver
-  protected runner!: EventRunner
+  protected runner!: MemoryRunner
   protected abortController: AbortController
   protected destroyDefer: Deferrable
   protected workers: Map<number, WorkerState> = new Map()
@@ -293,11 +293,8 @@ export class AppViewIndexer {
     const currentSkew = Date.now() - this.lastEventTimestamp
     const currentSkewStr = (currentSkew / 1000).toFixed(1) + 's'
     const workerCount = this.workers.size
-    const totalActiveEvents = Array.from(this.workers.values()).reduce(
-      (sum, state) => sum + state.activeEvents,
-      0,
-    )
-    const avgEventsPerWorker = totalActiveEvents / workerCount
+    const totalQueuedEvents = this.runner.mainQueue.size
+    const avgEventsPerWorker = totalQueuedEvents / workerCount
     const avgEventsStr = avgEventsPerWorker.toFixed(1)
 
     // If skew is too high,
