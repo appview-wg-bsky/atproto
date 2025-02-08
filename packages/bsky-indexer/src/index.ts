@@ -36,7 +36,7 @@ const MIN_WORKERS = 5
 const MAX_WORKERS = 20
 const SCALE_CHECK_INTERVAL = 10_000
 const MAX_ACCEPTABLE_SKEW = 3_000
-const MAX_EVENTS_PER_WORKER = 200
+const MAX_EVENTS_PER_WORKER = 250
 
 type WorkerMessage =
   | { type: 'ready'; workerId: number }
