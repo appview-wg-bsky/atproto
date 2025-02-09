@@ -128,8 +128,8 @@ export class IndexingService {
   }
 
   // Takes a map of record arrays indexed by collection name
-  // Does not write to record table, need to call indexRecordsGeneric() afterwards
-  async indexRecordsByCollectionBulk(
+  // Does not write to 'record' table, need to call {@link bulkIndexToRecordTable} afterwards
+  async bulkIndexToCollectionSpecificTables(
     records: Map<
       string,
       Array<{
@@ -178,7 +178,7 @@ export class IndexingService {
     })
   }
 
-  async indexRecordsGenericBulk(
+  async bulkIndexToRecordTable(
     records: Array<{ uri: AtUri; cid: CID; obj: unknown; timestamp: string }>,
   ) {
     if (!records.length) return
