@@ -159,31 +159,28 @@ export class AppViewIndexer {
       }
     })
 
-    if (this.opts.sub) {
-      console.log('using provided subscription')
-      this.sub = this.opts.sub
-    } else {
-      console.log('initializing subscription')
-      this.sub = new WebSocketKeepAlive({
-        signal: this.abortController.signal,
-        heartbeatIntervalMs: 10_000,
-        getUrl: async () => {
-          const getCursorFn = () =>
-            this.runner?.getCursor() ?? this.opts.getCursor?.()
-          let url = `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos`
-          const cursor = await getCursorFn()
-          if (cursor !== undefined) {
-            url += `?cursor=${cursor}`
-          }
-          return url
-        },
-      })
-    }
-
     this.scalingInterval = setInterval(
       () => this.checkScaling(),
       SCALE_CHECK_INTERVAL,
     )
+  }
+
+  protected initializeSubscription() {
+    if (this.sub && this.sub instanceof WebSocketKeepAlive) this.sub.ws?.close()
+    return (this.sub = new WebSocketKeepAlive({
+      signal: this.abortController.signal,
+      heartbeatIntervalMs: 10_000,
+      getUrl: async () => {
+        const getCursorFn = () =>
+          this.runner?.getCursor() ?? this.opts.getCursor?.()
+        let url = `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos`
+        const cursor = await getCursorFn()
+        if (cursor !== undefined) {
+          url += `?cursor=${cursor}`
+        }
+        return url
+      },
+    }))
   }
 
   protected updateLastEventTimestamp(timestamp: number) {
@@ -367,6 +364,14 @@ export class AppViewIndexer {
 
   async start(): Promise<void> {
     if (!cluster.isPrimary) return
+
+    if (this.opts.sub) {
+      console.log('using provided subscription')
+      this.sub = this.opts.sub
+    } else {
+      console.log('initializing subscription')
+      this.initializeSubscription()
+    }
 
     try {
       for await (const chunk of this.sub) {
