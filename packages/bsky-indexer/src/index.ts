@@ -127,30 +127,34 @@ export class AppViewIndexer {
 
       if (message.type === 'ready') {
         console.log(`worker ${worker.id} ready`)
-      } else if (message.type === 'processed' && message.eventId) {
-        if ('timestamp' in message) {
-          workerState.lastEventTime = message.timestamp
-          this.updateLastEventTimestamp(message.timestamp)
-        }
+      } else if (message.type === 'processed') {
+        workerState.activeEvents = Math.max(0, workerState.activeEvents - 1)
 
-        workerState.activeEvents--
-
-        const tracked = this.trackedEvents.get(message.eventId)
-        if (tracked) {
-          if ('error' in message) {
-            tracked.reject(message.error)
-          } else {
-            tracked.resolve()
+        if (message.eventId) {
+          if ('timestamp' in message) {
+            workerState.lastEventTime = message.timestamp
+            this.updateLastEventTimestamp(message.timestamp)
           }
-          this.trackedEvents.delete(message.eventId)
+
+          const tracked = this.trackedEvents.get(message.eventId)
+          if (tracked) {
+            if ('error' in message) {
+              tracked.reject(message.error)
+            } else {
+              tracked.resolve()
+            }
+            this.trackedEvents.delete(message.eventId)
+          }
         }
       }
     })
 
     cluster.on('exit', (worker) => {
+      const state = this.workers.get(worker.id)
+      const shouldRespawn = state && !state.terminated
       this.workers.delete(worker.id)
 
-      if (!this.abortController?.signal.aborted) {
+      if (!this.abortController?.signal.aborted && shouldRespawn) {
         this.spawnWorker()
       }
     })
@@ -271,21 +275,22 @@ export class AppViewIndexer {
       }
     }
 
-    if (workerToTerminate && workerToTerminate[1].activeEvents === 0) {
-      const [id, state] = workerToTerminate
-      state.worker.kill()
-      this.workers.delete(id)
-    } else if (workerToTerminate) {
-      const [id, state] = workerToTerminate
+    if (!workerToTerminate) {
+      console.warn('no workers to terminate')
+      return
+    }
+    const [id, state] = workerToTerminate
+    if (state.activeEvents === 0) {
+      state.worker.destroy()
+      console.log(`worker ${id} terminated`)
+    } else {
       state.terminated = true
       setInterval(() => {
         if (state.activeEvents === 0) {
-          state.worker.kill()
-          this.workers.delete(id)
+          state.worker.destroy()
+          console.log(`worker ${id} terminated`)
         }
       }, 1000)
-    } else {
-      console.warn('no workers to terminate')
     }
   }
 
