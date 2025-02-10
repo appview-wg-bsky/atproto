@@ -282,9 +282,10 @@ export class AppViewIndexer {
       console.log(`worker ${id} terminated`)
     } else {
       state.terminated = true
-      setInterval(() => {
+      const interval = setInterval(() => {
         if (state.activeEvents === 0) {
           state.worker.destroy()
+          clearInterval(interval)
           console.log(`worker ${id} terminated`)
         }
       }, 1000)
@@ -342,8 +343,13 @@ export class AppViewIndexer {
   protected async sendToWorker(chunk: Uint8Array): Promise<void> {
     let workerState: WorkerState | undefined
 
+    let elapsed = 0
     while (!(workerState = this.getNextAvailableWorker())) {
       await new Promise((resolve) => setTimeout(resolve, 10))
+      elapsed += 10
+      if (elapsed > 10_000) {
+        throw new Error('no workers available for 10 seconds')
+      }
     }
 
     const eventId = Math.random().toString(36).slice(2)
