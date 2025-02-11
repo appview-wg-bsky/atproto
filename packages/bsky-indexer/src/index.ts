@@ -67,7 +67,6 @@ interface WorkerState {
 
 export interface IndexerOptions
   extends Partial<Omit<FirehoseOptions, 'idResolver'>> {
-  runner?: MemoryRunner
   identityResolverOptions?: IdentityResolverOpts
   databaseOptions: ConstructorParameters<typeof Database>[0]
   onError?: (err: Error) => void
@@ -80,7 +79,6 @@ export class AppViewIndexer {
   protected sub!: AsyncIterable<Uint8Array>
   protected indexingSvc?: IndexingService
   protected idResolver?: IdResolver
-  protected runner!: MemoryRunner
   protected abortController: AbortController
   protected counter?: EventCounter
   protected destroyDefer: Deferrable
@@ -88,7 +86,6 @@ export class AppViewIndexer {
   protected lastEventTimestamp = Date.now()
   protected skewDangerousSince: number | undefined
   protected scalingInterval: NodeJS.Timeout | null = null
-  protected trackedEvents: Map<string, TrackedEvent> = new Map()
   protected minWorkers: number
   protected maxWorkers: number
 
@@ -96,11 +93,6 @@ export class AppViewIndexer {
     this.destroyDefer = createDeferrable()
     this.abortController = new AbortController()
 
-    if (this.opts.getCursor && this.opts.runner) {
-      throw new Error('Must set only `getCursor` or `runner`')
-    }
-
-    if (this.opts.runner) this.runner = this.opts.runner
     this.opts.onError ??= (err) =>
       // @ts-expect-error
       console.error(err.message, err.cause?.message ?? 'error in subscription')
@@ -125,7 +117,6 @@ export class AppViewIndexer {
         'worker state: ' +
           [...this.workers.values()].map((w) => w.activeEvents).join(', '),
       )
-      console.log('running: ' + this.runner.mainQueue.size)
       console.log(
         'last event timestamp: ' +
           new Date(this.lastEventTimestamp).toISOString(),
@@ -133,8 +124,6 @@ export class AppViewIndexer {
       console.log('events per second: ' + eventsPerSecond.toFixed(1))
       this.checkScaling(eventsPerSecond)
     })
-
-    this.runner ??= new MemoryRunner()
 
     cluster.on('message', (worker, message: WorkerMessage) => {
       const workerState = this.workers.get(worker.id)
@@ -159,16 +148,6 @@ export class AppViewIndexer {
           )
           this.updateLastEventTimestamp(message.timestamp)
         }
-
-        const tracked = this.trackedEvents.get(message.eventId)
-        if (tracked) {
-          if ('error' in message) {
-            tracked.reject(message.error)
-          } else {
-            tracked.resolve()
-          }
-          this.trackedEvents.delete(message.eventId)
-        }
       }
     })
 
@@ -189,10 +168,8 @@ export class AppViewIndexer {
       signal: this.abortController.signal,
       heartbeatIntervalMs: 10_000,
       getUrl: async () => {
-        const getCursorFn = () =>
-          this.runner?.getCursor() ?? this.opts.getCursor?.()
         let url = `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos`
-        const cursor = await getCursorFn()
+        const cursor = await this.opts.getCursor?.()
         if (cursor !== undefined) {
           url += `?cursor=${cursor}`
         }
@@ -384,19 +361,12 @@ export class AppViewIndexer {
     }
 
     const eventId = Math.random().toString(36).slice(2)
-    return new Promise((resolve, reject) => {
-      this.trackedEvents.set(eventId, {
-        id: eventId,
-        resolve,
-        reject,
-      })
-      workerState!.activeEvents++
-      const evt = {
-        chunk: [...chunk],
-        eventId,
-      }
-      workerState!.worker.send(evt)
-    })
+    const evt = {
+      chunk: [...chunk],
+      eventId,
+    }
+    workerState!.activeEvents++
+    workerState!.worker.send(evt)
   }
 
   async start(): Promise<void> {
@@ -413,7 +383,7 @@ export class AppViewIndexer {
     try {
       for await (const chunk of this.sub) {
         this.counter?.count()
-        this.handleSubscriptionData(chunk)
+        void this.sendToWorker(chunk)
       }
     } catch (err) {
       if (err && (err as any).name === 'AbortError') {
@@ -423,18 +393,6 @@ export class AppViewIndexer {
       this.opts.onError?.(new FirehoseSubscriptionError(err))
       await wait(this.opts.subscriptionReconnectDelay ?? 3000)
       return this.start()
-    }
-  }
-
-  protected handleSubscriptionData(chunk: Uint8Array) {
-    const evt = this.parseEvtBytes(chunk)
-    if (!evt) return
-
-    const parsed = didAndSeqForEvt(evt)
-    if (parsed) {
-      void this.runner.trackEvent(parsed.did, parsed.seq, () =>
-        this.sendToWorker(chunk),
-      )
     }
   }
 
