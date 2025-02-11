@@ -35,7 +35,7 @@ const MIN_WORKERS = 5
 const MAX_WORKERS = 20
 const SCALE_CHECK_INTERVAL = 10_000
 const MAX_ACCEPTABLE_SKEW = 3_000
-const MAX_EVENTS_PER_WORKER = 5000
+const MAX_EVENTS_PER_WORKER = 250
 
 type WorkerMessage =
   | { type: 'ready'; workerId: number }
@@ -212,7 +212,7 @@ export class AppViewIndexer {
 
   protected getNextAvailableWorker(): WorkerState | undefined {
     let leastBusyWorker: WorkerState | undefined
-    let minActiveEvents = MAX_EVENTS_PER_WORKER
+    let minActiveEvents = Infinity
 
     for (const state of this.workers.values()) {
       if (state.terminated) continue
@@ -222,9 +222,7 @@ export class AppViewIndexer {
       }
     }
 
-    return (leastBusyWorker?.activeEvents ?? Infinity) < MAX_EVENTS_PER_WORKER
-      ? leastBusyWorker
-      : undefined
+    return leastBusyWorker
   }
 
   protected initializeWorker() {
