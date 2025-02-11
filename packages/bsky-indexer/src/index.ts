@@ -1,13 +1,13 @@
 import cluster, { Worker } from 'node:cluster'
-import { createDeferrable, Deferrable, wait } from '@atproto/common'
-import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
+import { BackgroundQueue, Database } from '@atproto/bsky'
+import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
+import { Deferrable, createDeferrable, wait } from '@atproto/common'
 import {
-  isAccount,
-  isCommit,
-  isIdentity,
-  isValidRepoEvent,
-  RepoEvent,
-} from './lexicons'
+  IdResolver,
+  IdentityResolverOpts,
+  MemoryCache,
+} from '@atproto/identity'
+import { WriteOpAction } from '@atproto/repo'
 import {
   Event,
   FirehoseHandlerError,
@@ -20,22 +20,22 @@ import {
   parseCommitUnauthenticated,
   parseIdentity,
 } from '@atproto/sync'
-import {
-  IdentityResolverOpts,
-  IdResolver,
-  MemoryCache,
-} from '@atproto/identity'
-import { WriteOpAction } from '@atproto/repo'
-import { BackgroundQueue, Database } from '@atproto/bsky'
-import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
-import { ensureChunkIsMessage } from '@atproto/xrpc-server'
 import type { FirehoseOptions } from '@atproto/sync'
+import { ensureChunkIsMessage } from '@atproto/xrpc-server'
+import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
+import {
+  RepoEvent,
+  isAccount,
+  isCommit,
+  isIdentity,
+  isValidRepoEvent,
+} from './lexicons'
 
 const MIN_WORKERS = 5
 const MAX_WORKERS = 20
 const SCALE_CHECK_INTERVAL = 10_000
 const MAX_ACCEPTABLE_SKEW = 3_000
-const MAX_EVENTS_PER_WORKER = 250
+const MAX_EVENTS_PER_WORKER = 5000
 
 type WorkerMessage =
   | { type: 'ready'; workerId: number }
@@ -82,6 +82,7 @@ export class AppViewIndexer {
   protected idResolver?: IdResolver
   protected runner!: MemoryRunner
   protected abortController: AbortController
+  protected counter?: EventCounter
   protected destroyDefer: Deferrable
   protected workers: Map<number, WorkerState> = new Map()
   protected lastEventTimestamp = Date.now()
@@ -119,6 +120,20 @@ export class AppViewIndexer {
       this.spawnWorker()
     }
 
+    this.counter = new EventCounter(SCALE_CHECK_INTERVAL, (eventsPerSecond) => {
+      console.log(
+        'worker state: ' +
+          [...this.workers.values()].map((w) => w.activeEvents).join(', '),
+      )
+      console.log('running: ' + this.runner.mainQueue.size)
+      console.log(
+        'last event timestamp: ' +
+          new Date(this.lastEventTimestamp).toISOString(),
+      )
+      console.log('events per second: ' + eventsPerSecond.toFixed(1))
+      this.checkScaling(eventsPerSecond)
+    })
+
     this.runner ??= new MemoryRunner()
 
     cluster.on('message', (worker, message: WorkerMessage) => {
@@ -128,23 +143,31 @@ export class AppViewIndexer {
       if (message.type === 'ready') {
         console.log(`worker ${worker.id} ready`)
       } else if (message.type === 'processed') {
-        workerState.activeEvents = Math.max(0, workerState.activeEvents - 1)
+        workerState!.activeEvents = Math.max(0, workerState!.activeEvents - 1)
 
-        if (message.eventId) {
-          if ('timestamp' in message) {
-            workerState.lastEventTime = message.timestamp
-            this.updateLastEventTimestamp(message.timestamp)
-          }
+        if (!message.eventId) {
+          console.warn(`worker ${worker.id} processed event without event id`)
+          return
+        }
 
-          const tracked = this.trackedEvents.get(message.eventId)
-          if (tracked) {
-            if ('error' in message) {
-              tracked.reject(message.error)
-            } else {
-              tracked.resolve()
-            }
-            this.trackedEvents.delete(message.eventId)
+        console.log(`worker ${worker.id} processed event ${message.eventId}`)
+
+        if ('timestamp' in message) {
+          workerState.lastEventTime = Math.max(
+            workerState.lastEventTime,
+            message.timestamp,
+          )
+          this.updateLastEventTimestamp(message.timestamp)
+        }
+
+        const tracked = this.trackedEvents.get(message.eventId)
+        if (tracked) {
+          if ('error' in message) {
+            tracked.reject(message.error)
+          } else {
+            tracked.resolve()
           }
+          this.trackedEvents.delete(message.eventId)
         }
       }
     })
@@ -158,11 +181,6 @@ export class AppViewIndexer {
         this.spawnWorker()
       }
     })
-
-    this.scalingInterval = setInterval(
-      () => this.checkScaling(),
-      SCALE_CHECK_INTERVAL,
-    )
   }
 
   protected initializeSubscription() {
@@ -221,7 +239,7 @@ export class AppViewIndexer {
       new BackgroundQueue(db),
     )
 
-    process.on('message', async (msg) => {
+    process.on('message', (msg) => {
       if (
         !msg ||
         typeof msg !== 'object' ||
@@ -235,13 +253,18 @@ export class AppViewIndexer {
         return
       }
 
-      const evt = await this.parseEvtBytes(Uint8Array.from(msg.chunk))
-      if (!evt) return
+      console.log(`worker ${cluster.worker!.id} received event ${msg.eventId}`)
+
+      const evt = this.parseEvtBytes(Uint8Array.from(msg.chunk))
+      if (!evt) {
+        console.warn(`early exit for event ${msg.eventId}`)
+        return
+      }
 
       void this.workerHandleEvent(evt, msg.eventId)
     })
 
-    process.send?.({
+    process.send!({
       type: 'ready',
       workerId: cluster.worker!.id,
     })
@@ -282,22 +305,29 @@ export class AppViewIndexer {
       console.log(`worker ${id} terminated`)
     } else {
       state.terminated = true
+      const killTimeout = setTimeout(() => {
+        console.log(
+          `forced to kill worker ${id} with ${state.activeEvents} events`,
+        )
+        state.worker.kill()
+      }, 60_000)
       const interval = setInterval(() => {
         if (state.activeEvents === 0) {
           state.worker.destroy()
           clearInterval(interval)
+          clearTimeout(killTimeout)
           console.log(`worker ${id} terminated`)
         }
       }, 1000)
     }
   }
 
-  protected checkScaling() {
+  protected checkScaling(eventsPerSecond: number) {
     const currentSkew = Date.now() - this.lastEventTimestamp
     const currentSkewStr = (currentSkew / 1000).toFixed(1) + 's'
+
     const workerCount = this.workers.size
-    const totalQueuedEvents = this.runner.mainQueue.size
-    const avgEventsPerWorker = totalQueuedEvents / workerCount
+    const avgEventsPerWorker = eventsPerSecond / workerCount
     const avgEventsStr = avgEventsPerWorker.toFixed(1)
 
     // If skew is too high,
@@ -329,7 +359,7 @@ export class AppViewIndexer {
       // If skew has gone down significantly and workers aren't overloaded, scale down
       if (
         currentSkew < MAX_ACCEPTABLE_SKEW / 2 &&
-        avgEventsPerWorker < MAX_EVENTS_PER_WORKER * 0.9 &&
+        avgEventsPerWorker < MAX_EVENTS_PER_WORKER * 0.8 &&
         workerCount > this.minWorkers
       ) {
         console.log(
@@ -348,7 +378,8 @@ export class AppViewIndexer {
       await new Promise((resolve) => setTimeout(resolve, 10))
       elapsed += 10
       if (elapsed > 10_000) {
-        throw new Error('no workers available for 10 seconds')
+        this.opts.onError?.(new Error('no workers available for 10 seconds'))
+        return
       }
     }
 
@@ -381,6 +412,7 @@ export class AppViewIndexer {
 
     try {
       for await (const chunk of this.sub) {
+        this.counter?.count()
         this.handleSubscriptionData(chunk)
       }
     } catch (err) {
@@ -412,7 +444,7 @@ export class AppViewIndexer {
     try {
       parsed = await this.parseEvt(evt)
     } catch (err) {
-      process.send?.({
+      process.send!({
         type: 'processed',
         workerId: cluster.worker!.id,
         eventId,
@@ -463,7 +495,7 @@ export class AppViewIndexer {
       }
     }
 
-    process.send?.({
+    process.send!({
       type: 'processed',
       workerId: cluster.worker!.id,
       eventId,
@@ -534,6 +566,24 @@ export class AppViewIndexer {
     }
 
     await this.destroyDefer?.complete
+  }
+}
+
+class EventCounter {
+  private counter = 0
+
+  constructor(
+    public interval: number,
+    public onInterval: (eventsPerSecond: number) => void,
+  ) {
+    setInterval(() => {
+      this.onInterval(this.counter / this.interval)
+      this.counter = 0
+    }, interval)
+  }
+
+  count() {
+    this.counter++
   }
 }
 
