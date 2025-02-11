@@ -381,15 +381,7 @@ export class AppViewIndexer {
 
     try {
       for await (const chunk of this.sub) {
-        const evt = await this.parseEvtBytes(chunk)
-        if (!evt) continue
-
-        const parsed = didAndSeqForEvt(evt)
-        if (parsed) {
-          void this.runner.trackEvent(parsed.did, parsed.seq, () =>
-            this.sendToWorker(chunk),
-          )
-        }
+        this.handleSubscriptionData(chunk)
       }
     } catch (err) {
       if (err && (err as any).name === 'AbortError') {
@@ -399,6 +391,18 @@ export class AppViewIndexer {
       this.opts.onError?.(new FirehoseSubscriptionError(err))
       await wait(this.opts.subscriptionReconnectDelay ?? 3000)
       return this.start()
+    }
+  }
+
+  protected handleSubscriptionData(chunk: Uint8Array) {
+    const evt = this.parseEvtBytes(chunk)
+    if (!evt) return
+
+    const parsed = didAndSeqForEvt(evt)
+    if (parsed) {
+      void this.runner.trackEvent(parsed.did, parsed.seq, () =>
+        this.sendToWorker(chunk),
+      )
     }
   }
 
@@ -467,9 +471,7 @@ export class AppViewIndexer {
     })
   }
 
-  protected async parseEvtBytes(
-    chunk: Uint8Array,
-  ): Promise<RepoEvent | undefined> {
+  protected parseEvtBytes(chunk: Uint8Array): RepoEvent | undefined {
     const message = ensureChunkIsMessage(chunk)
     const t = message.header.t
     const clone = message.body !== undefined ? { ...message.body } : undefined
