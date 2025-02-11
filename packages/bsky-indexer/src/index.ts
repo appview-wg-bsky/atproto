@@ -310,10 +310,12 @@ export class AppViewIndexer {
           `forced to kill worker ${id} with ${state.activeEvents} events`,
         )
         state.worker.kill()
+        this.workers.delete(id)
       }, 60_000)
       const interval = setInterval(() => {
         if (state.activeEvents === 0) {
           state.worker.destroy()
+          this.workers.delete(id)
           clearInterval(interval)
           clearTimeout(killTimeout)
           console.log(`worker ${id} terminated`)
@@ -454,6 +456,9 @@ export class AppViewIndexer {
     }
 
     for (const write of parsed) {
+      console.time(
+        `worker ${cluster.worker!.id} event ${eventId} write ${write.seq}`,
+      )
       try {
         if (write.event === 'identity') {
           await this.indexingSvc!.indexHandle(write.did, write.time, true)
@@ -492,6 +497,10 @@ export class AppViewIndexer {
         }
       } catch (err) {
         this.opts.onError?.(new FirehoseHandlerError(err, write))
+      } finally {
+        console.timeEnd(
+          `worker ${cluster.worker!.id} event ${eventId} write ${write.seq}`,
+        )
       }
     }
 
