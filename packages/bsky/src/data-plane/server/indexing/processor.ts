@@ -80,7 +80,6 @@ export class RecordProcessor<T, S> {
       })
       .onConflict((oc) => oc.doNothing())
       .execute()
-    console.time('insertFn ' + uri.toString())
     const inserted = await this.params.insertFn(
       this.db,
       uri,
@@ -88,18 +87,14 @@ export class RecordProcessor<T, S> {
       obj,
       timestamp,
     )
-    console.timeEnd('insertFn ' + uri.toString())
     if (inserted) {
       this.aggregateOnCommit(inserted)
       if (!opts?.disableNotifs) {
-        console.time('handleNotifs ' + uri.toString())
         await this.handleNotifs({ inserted })
-        console.timeEnd('handleNotifs ' + uri.toString())
       }
       return
     }
     // if duplicate, insert into duplicates table with no events
-    console.time('findDuplicate ' + uri.toString())
     const found = await this.params.findDuplicate(this.db, uri, obj)
     if (found && found.toString() !== uri.toString()) {
       await this.db
@@ -113,7 +108,6 @@ export class RecordProcessor<T, S> {
         .onConflict((oc) => oc.doNothing())
         .execute()
     }
-    console.timeEnd('findDuplicate ' + uri.toString())
   }
 
   // Currently using a very simple strategy for updates: purge the existing index
