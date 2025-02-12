@@ -98,11 +98,13 @@ export class IndexingService {
       const indexingTx = this.transact(txn)
       const indexer = indexingTx.findIndexerForCollection(uri.collection)
       if (!indexer) return
+      console.time('indexRecord ' + uri.toString())
       if (action === WriteOpAction.Create) {
         await indexer.insertRecord(uri, cid, obj, timestamp, opts)
       } else {
         await indexer.updateRecord(uri, cid, obj, timestamp)
       }
+      console.timeEnd('indexRecord ' + uri.toString())
     })
   }
 
