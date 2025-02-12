@@ -3,26 +3,27 @@
 
 'use strict'
 
-const { AppViewIndexer } = require('@futuristick/bsky-indexer')
+const bsky = require('@atproto/bsky')
+const { IdResolver } = require('@atproto/identity')
 
 const main = async () => {
   const env = getEnv()
+  const config = bsky.ServerConfig.readEnv(env)
 
-  const dbOptions = {
+  const db = new bsky.Database({
     url: env.dbPostgresUrl,
     schema: env.dbPostgresSchema,
-    poolSize: env.poolSize ?? 400,
-    idleTimeoutMillis: 1_000,
-  }
+    poolSize: 4000,
+  })
 
-  const idResolverOptions = { plcUrl: env.didPlcUrl, timeout: 10_000 }
+  const idResolver = new IdResolver({
+    plcUrl: config.didPlcUrl,
+  })
 
-  const sub = new AppViewIndexer({
-    identityResolverOptions: idResolverOptions,
-    databaseOptions: dbOptions,
+  const sub = new bsky.RepoSubscription({
     service: env.repoProvider,
-    unauthenticatedHandles: true,
-    unauthenticatedCommits: true,
+    db,
+    idResolver: idResolver,
   })
 
   sub.start()
