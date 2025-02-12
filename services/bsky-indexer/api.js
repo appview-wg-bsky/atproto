@@ -8,16 +8,15 @@ const { IdResolver } = require('@atproto/identity')
 
 const main = async () => {
   const env = getEnv()
-  const config = bsky.ServerConfig.readEnv(env)
 
   const db = new bsky.Database({
     url: env.dbPostgresUrl,
     schema: env.dbPostgresSchema,
-    poolSize: 4000,
+    poolSize: env.poolSize ?? 3000,
   })
 
   const idResolver = new IdResolver({
-    plcUrl: config.didPlcUrl,
+    plcUrl: env.didPlcUrl,
   })
 
   const sub = new bsky.RepoSubscription({
