@@ -116,7 +116,7 @@ const time = (label: string, promise: Promise<void>) => {
   return promise.then(() => {
     const elapsed = performance.now() - start
     if (elapsed > 5000) {
-      console.warn(label + ' - ' + elapsed + 'ms')
+      console.warn('slow: ' + label + ' - ' + elapsed + 'ms')
     }
   })
 }
