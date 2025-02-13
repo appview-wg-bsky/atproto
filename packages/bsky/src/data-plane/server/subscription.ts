@@ -23,6 +23,7 @@ export class RepoSubscription {
       idResolver,
       service,
       indexingSvc: this.indexingSvc,
+      background: this.background,
     })
     this.runner = runner
     this.firehose = firehose
@@ -38,6 +39,7 @@ export class RepoSubscription {
       idResolver: this.opts.idResolver,
       service: this.opts.service,
       indexingSvc: this.indexingSvc,
+      background: this.background,
     })
     this.runner = runner
     this.firehose = firehose
@@ -60,8 +62,9 @@ const createFirehose = (opts: {
   idResolver: IdResolver
   service: string
   indexingSvc: IndexingService
+  background: BackgroundQueue
 }) => {
-  const { idResolver, service, indexingSvc } = opts
+  const { idResolver, service, indexingSvc, background } = opts
   const runner = new MemoryRunner()
   const firehose = new Firehose({
     idResolver,
@@ -97,15 +100,12 @@ const createFirehose = (opts: {
                   : WriteOpAction.Update,
                 evt.time,
               )
+        background.add(() => indexingSvc.indexHandle(evt.did, evt.time))
         await Promise.all([
           time('indexFn ' + evt.event + ' ' + evt.uri, indexFn),
           time(
             'commitLastSeen ' + evt.did,
             indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
-          ),
-          time(
-            'indexHandle ' + evt.did,
-            indexingSvc.indexHandle(evt.did, evt.time),
           ),
         ])
       }
