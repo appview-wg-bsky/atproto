@@ -58,6 +58,10 @@ export class RepoSubscription {
   }
 }
 
+let lastReceived = 0,
+  lastProcessed = 0,
+  eventCount = 0
+
 const createFirehose = (opts: {
   idResolver: IdResolver
   service: string
@@ -74,7 +78,16 @@ const createFirehose = (opts: {
     unauthenticatedCommits: true, // @TODO there seems to be a very rare issue where the authenticator thinks a block is missing in deletion ops
     onError: (err) => log.error({ err }, 'error in subscription'),
     handleEvent: async (evt) => {
-      console.time(evt.event + ' ' + evt.uri || evt.did || '')
+      eventCount++
+      if (evt.time - lastReceived > 10_000) {
+        lastReceived = evt.time
+        log.info(
+          'skew - received - %s\t—\tev/s %s',
+          fmtTime(Math.abs(evt.time - Date.now())),
+          eventCount / Math.abs(evt.time - Date.now()),
+        )
+        eventCount = 0
+      }
       if (evt.event === 'identity') {
         await indexingSvc.indexHandle(evt.did, evt.time, true)
       } else if (evt.event === 'account') {
@@ -105,7 +118,13 @@ const createFirehose = (opts: {
           ),
         ])
       }
-      console.timeEnd(evt.event + ' ' + evt.uri || evt.did || '')
+      if (evt.time - lastProcessed > 10_000) {
+        log.info(
+          'skew - processed - %s',
+          fmtTime(Math.abs(evt.time - Date.now())),
+        )
+        lastProcessed = evt.time
+      }
     },
   })
   return { firehose, runner }
@@ -116,7 +135,20 @@ const time = (label: string, promise: Promise<void>) => {
   return promise.then(() => {
     const elapsed = performance.now() - start
     if (elapsed > 5000) {
-      console.warn('slow: ' + label + ' - ' + elapsed + 'ms')
+      console.warn('slow: ' + label + ' - ' + fmtTime(elapsed))
     }
   })
+}
+
+const fmtTime = (ms: number) => {
+  const secs = Math.floor(ms / 1000)
+  const mins = Math.floor(secs / 60)
+
+  if (mins > 0) {
+    return `${mins}m${secs % 60}.${(ms % 1000).toFixed(0)}s`
+  } else if (secs > 0) {
+    return `${secs}.${(ms % 1000).toFixed(0)}s`
+  } else {
+    return `${ms.toFixed(0)}ms`
+  }
 }
