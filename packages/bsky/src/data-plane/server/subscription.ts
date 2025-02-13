@@ -60,7 +60,8 @@ export class RepoSubscription {
 
 let lastReceived = 0,
   lastProcessed = 0,
-  eventCount = 0
+  eventCount = 0,
+  lastLogged = Date.now()
 
 const createFirehose = (opts: {
   idResolver: IdResolver
@@ -73,12 +74,13 @@ const createFirehose = (opts: {
 
   setInterval(() => {
     console.log(
-      `skew - received - ${fmtTime(Math.abs(lastReceived - Date.now()))}\t—\tev/s ${eventCount / Math.abs(lastReceived - Date.now())}`,
+      `skew - received - ${fmtTime(Math.abs(lastReceived - Date.now()))}\t—\tev/s ${eventCount / (Math.abs(Date.now() - lastLogged) / 1000)}`,
     )
     console.log(
-      `skew - processed - ${fmtTime(Math.abs(lastProcessed - Date.now()))}\t—\tev/s ${eventCount / Math.abs(lastProcessed - Date.now())}`,
+      `skew - processed - ${fmtTime(Math.abs(lastProcessed - Date.now()))}\t—\tev/s ${eventCount / (Math.abs(Date.now() - lastLogged) / 1000)}`,
     )
     eventCount = 0
+    lastLogged = Date.now()
   }, 10_000)
 
   const firehose = new Firehose({
@@ -90,8 +92,9 @@ const createFirehose = (opts: {
     onError: (err) => log.error({ err }, 'error in subscription'),
     handleEvent: async (evt) => {
       eventCount++
-      if (evt.time > lastReceived) {
-        lastReceived = evt.time
+      const time = new Date(evt.time).getTime()
+      if (time > lastReceived) {
+        lastReceived = time
       }
       if (evt.event === 'identity') {
         await indexingSvc.indexHandle(evt.did, evt.time, true)
@@ -121,8 +124,8 @@ const createFirehose = (opts: {
           indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
         ])
       }
-      if (evt.time - lastProcessed > 10_000) {
-        lastProcessed = evt.time
+      if (time > lastProcessed) {
+        lastProcessed = time
       }
     },
   })
