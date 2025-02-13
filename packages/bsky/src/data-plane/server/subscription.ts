@@ -82,9 +82,7 @@ const createFirehose = (opts: {
       if (evt.time - lastReceived > 10_000) {
         lastReceived = evt.time
         log.info(
-          'skew - received - %s\t—\tev/s %s',
-          fmtTime(Math.abs(evt.time - Date.now())),
-          eventCount / Math.abs(evt.time - Date.now()),
+          `skew - received - ${fmtTime(Math.abs(evt.time - Date.now()))}\t—\tev/s ${eventCount / Math.abs(evt.time - Date.now())}`,
         )
         eventCount = 0
       }
@@ -119,9 +117,8 @@ const createFirehose = (opts: {
         ])
       }
       if (evt.time - lastProcessed > 10_000) {
-        log.info(
-          'skew - processed - %s',
-          fmtTime(Math.abs(evt.time - Date.now())),
+        console.log(
+          `skew - processed - ${fmtTime(Math.abs(evt.time - Date.now()))}`,
         )
         lastProcessed = evt.time
       }
