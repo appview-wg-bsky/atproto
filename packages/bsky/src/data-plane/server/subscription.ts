@@ -70,6 +70,17 @@ const createFirehose = (opts: {
 }) => {
   const { idResolver, service, indexingSvc, background } = opts
   const runner = new MemoryRunner()
+
+  setInterval(() => {
+    console.log(
+      `skew - received - ${fmtTime(Math.abs(lastReceived - Date.now()))}\t—\tev/s ${eventCount / Math.abs(lastReceived - Date.now())}`,
+    )
+    console.log(
+      `skew - processed - ${fmtTime(Math.abs(lastProcessed - Date.now()))}\t—\tev/s ${eventCount / Math.abs(lastProcessed - Date.now())}`,
+    )
+    eventCount = 0
+  }, 10_000)
+
   const firehose = new Firehose({
     idResolver,
     runner,
@@ -79,12 +90,8 @@ const createFirehose = (opts: {
     onError: (err) => log.error({ err }, 'error in subscription'),
     handleEvent: async (evt) => {
       eventCount++
-      if (evt.time - lastReceived > 10_000) {
+      if (evt.time > lastReceived) {
         lastReceived = evt.time
-        log.info(
-          `skew - received - ${fmtTime(Math.abs(evt.time - Date.now()))}\t—\tev/s ${eventCount / Math.abs(evt.time - Date.now())}`,
-        )
-        eventCount = 0
       }
       if (evt.event === 'identity') {
         await indexingSvc.indexHandle(evt.did, evt.time, true)
@@ -109,32 +116,17 @@ const createFirehose = (opts: {
               )
         background.add(() => indexingSvc.indexHandle(evt.did, evt.time))
         await Promise.all([
-          time('indexFn ' + evt.event + ' ' + evt.uri, indexFn),
-          time(
-            'commitLastSeen ' + evt.did,
-            indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
-          ),
+          indexFn,
+
+          indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
         ])
       }
       if (evt.time - lastProcessed > 10_000) {
-        console.log(
-          `skew - processed - ${fmtTime(Math.abs(evt.time - Date.now()))}`,
-        )
         lastProcessed = evt.time
       }
     },
   })
   return { firehose, runner }
-}
-
-const time = (label: string, promise: Promise<void>) => {
-  const start = performance.now()
-  return promise.then(() => {
-    const elapsed = performance.now() - start
-    if (elapsed > 5000) {
-      console.warn('slow: ' + label + ' - ' + fmtTime(elapsed))
-    }
-  })
 }
 
 const fmtTime = (ms: number) => {
