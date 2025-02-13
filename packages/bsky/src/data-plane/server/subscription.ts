@@ -94,13 +94,29 @@ const createFirehose = (opts: {
                 evt.time,
               )
         await Promise.all([
-          indexFn,
-          indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
-          indexingSvc.indexHandle(evt.did, evt.time),
+          time('indexFn ' + evt.event + ' ' + evt.uri, indexFn),
+          time(
+            'commitLastSeen ' + evt.did,
+            indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
+          ),
+          time(
+            'indexHandle ' + evt.did,
+            indexingSvc.indexHandle(evt.did, evt.time),
+          ),
         ])
       }
       console.timeEnd(evt.event + ' ' + evt.uri || evt.did || '')
     },
   })
   return { firehose, runner }
+}
+
+const time = (label: string, promise: Promise<void>) => {
+  const start = performance.now()
+  return promise.then(() => {
+    const elapsed = performance.now() - start
+    if (elapsed > 5000) {
+      console.warn(label + ' - ' + elapsed + 'ms')
+    }
+  })
 }
