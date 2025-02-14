@@ -16,6 +16,7 @@ const main = async () => {
 
   const idResolverOptions = {
     plcUrl: env.didPlcUrl,
+    timeout: 30_000,
   }
 
   const sub = new FirehoseSubscription({
