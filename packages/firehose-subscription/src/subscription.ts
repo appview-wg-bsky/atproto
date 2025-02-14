@@ -87,9 +87,13 @@ export class FirehoseSubscription {
     }
   }
 
-  private getNextWorker(): Worker {
+  private async getNextWorker(): Promise<Worker> {
     const worker = this.workers[this.currentWorker]
     this.currentWorker = (this.currentWorker + 1) % this.workers.length
+    if (!worker) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      return this.getNextWorker()
+    }
     return worker
   }
 
@@ -174,7 +178,7 @@ export class FirehoseSubscription {
       for await (const chunk of this.ws) {
         if (this.destroyed) break
 
-        const worker = this.getNextWorker()
+        const worker = await this.getNextWorker()
         worker.postMessage({
           type: 'chunk',
           data: chunk,
