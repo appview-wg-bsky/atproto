@@ -99,6 +99,11 @@ export class FirehoseSubscription {
       workerStats.reduce((a, b) => a + (b.currentLatencyMs ?? 0), 0) /
       workerStats.length
 
+    if (Number.isNaN(avgLatency)) {
+      console.warn('avgLatency is NaN')
+      return
+    }
+
     console.log(
       `avg latency: ${(avgLatency / 60_000).toFixed(0)}m ${(avgLatency / 1000).toFixed(2)}s`,
     )
@@ -167,13 +172,10 @@ export class FirehoseSubscription {
         if (this.destroyed) break
 
         const worker = this.getNextWorker()
-        worker.postMessage(
-          {
-            type: 'chunk',
-            data: chunk,
-          },
-          [chunk.buffer],
-        )
+        worker.postMessage({
+          type: 'chunk',
+          data: chunk,
+        })
       }
     } catch (err) {
       this.opts.onError?.(new FirehoseSubscriptionError(err))
