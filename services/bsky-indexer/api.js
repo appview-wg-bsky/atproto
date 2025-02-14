@@ -16,7 +16,7 @@ const main = async () => {
 
   const idResolverOptions = {
     plcUrl: env.didPlcUrl,
-    timeout: 30_000,
+    timeout: 60_000,
   }
 
   const sub = new FirehoseSubscription({
@@ -25,7 +25,8 @@ const main = async () => {
     idResolverOptions,
     minWorkers: 4,
     maxWorkers: 16,
-    onError: (err) => console.error(err),
+    onError: (err) =>
+      console.error(...(err.cause ? [err.message, err.cause] : [err])),
   })
 
   void sub.start()
