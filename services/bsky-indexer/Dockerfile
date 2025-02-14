@@ -13,6 +13,7 @@ COPY ./*.* ./
 COPY ./tsconfig ./tsconfig
 COPY ./packages/bsky ./packages/bsky
 COPY ./packages/bsky-indexer ./packages/bsky-indexer
+COPY ./packages/firehose-subscription ./packages/firehose-subscription
 COPY ./packages/api ./packages/api
 COPY ./packages/common ./packages/common
 COPY ./packages/common-web ./packages/common-web
