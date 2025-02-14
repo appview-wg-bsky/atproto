@@ -168,7 +168,7 @@ export class FirehoseSubscription {
 
       this.scaleCheckInterval = setInterval(
         () => this.checkScaling(),
-        this.opts.scaleCheckIntervalMs,
+        this.settings.scaleCheckIntervalMs,
       )
 
       for await (const chunk of this.ws) {
