@@ -17,6 +17,8 @@ export class FirehoseSubscription {
   private currentWorker = 0
   private scaleCheckInterval: NodeJS.Timeout | null = null
 
+  private totalProcessed = 0
+
   private settings = {
     targetLatencyMs: 10_000,
     scaleCheckIntervalMs: 10_000,
@@ -91,10 +93,27 @@ export class FirehoseSubscription {
   private checkScaling() {
     if (this.workers.length === 0) return
 
-    const latencies = [...this.workerStats.values()].map(
-      (stats) => stats.currentLatencyMs ?? 0,
+    const workerStats = [...this.workerStats.values()]
+
+    const avgLatency =
+      workerStats.reduce((a, b) => a + (b.currentLatencyMs ?? 0), 0) /
+      workerStats.length
+
+    console.log(
+      `avg latency: ${(avgLatency / 60_000).toFixed(0)}m ${(avgLatency / 1000).toFixed(2)}s`,
     )
-    const avgLatency = latencies.reduce((a, b) => a + b, 0) / latencies.length
+
+    if (this.totalProcessed) {
+      const newTotalProcessed = workerStats.reduce(
+        (a, b) => a + b.processedCount,
+        0,
+      )
+      const processedRate =
+        (newTotalProcessed - this.totalProcessed) /
+        (this.settings.scaleCheckIntervalMs / 1000)
+      console.log(`processed rate: ${processedRate.toFixed(0)}/s`)
+      this.totalProcessed = newTotalProcessed
+    }
 
     // Scale up if we're falling behind
     if (
