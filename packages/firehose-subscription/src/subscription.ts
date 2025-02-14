@@ -64,12 +64,7 @@ export class FirehoseSubscription {
       if (msg.type === 'error') {
         this.opts.onError?.(msg.error)
       } else if (msg.type === 'stats') {
-        if (!stats?.ready) {
-          console.warn("Received stats for worker that isn't ready")
-          this.workerStats.set(workerId, { ...msg.stats, ready: true })
-        } else {
-          this.workerStats.set(workerId, { ...stats, ...msg.stats })
-        }
+        this.workerStats.set(workerId, { ...stats, ...msg.stats, ready: true })
       }
     })
 
