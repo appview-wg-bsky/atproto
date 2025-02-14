@@ -107,12 +107,24 @@ async function parseEvt(evt: RepoEvent): Promise<Event[]> {
       return []
     }
   } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
+    let error = err
+    if (err instanceof Error) {
+      switch (err.name) {
+        case 'AbortError':
+          return []
+        case 'TypeError':
+          if (
+            err.cause instanceof Error &&
+            err.cause.name === 'ConnectTimeoutError'
+          ) {
+            error = err.cause
+          }
+      }
       return []
     }
     parentPort?.postMessage({
       type: 'error',
-      error: new FirehoseParseError(err, evt),
+      error: new FirehoseParseError(error, evt),
     })
     return []
   }
