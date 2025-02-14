@@ -136,6 +136,9 @@ export class FirehoseSubscription {
         this.settings.maxWorkers,
         this.workers.length + Math.ceil(this.workers.length * 0.5), // Add 50% more workers
       )
+      console.log(
+        `spawning ${newWorkersCount - this.workers.length} workers for a total of ${newWorkersCount}`,
+      )
       while (this.workers.length < newWorkersCount) {
         this.addWorker()
       }
@@ -150,6 +153,9 @@ export class FirehoseSubscription {
       const targetWorkers = Math.max(
         this.settings.minWorkers,
         Math.ceil(this.workers.length * 0.75), // Remove 25% of workers
+      )
+      console.log(
+        `killing ${this.workers.length - targetWorkers} workers for a total of ${targetWorkers}`,
       )
       while (this.workers.length > targetWorkers) {
         const worker = this.workers.pop()
