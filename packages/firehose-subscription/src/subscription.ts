@@ -23,7 +23,7 @@ export class FirehoseSubscription {
   private totalProcessed = 0
 
   private settings = {
-    targetLatencyMs: 10_000,
+    targetLatencyMs: 5_000,
     scaleCheckIntervalMs: 10_000,
     minWorkers: 2,
     maxWorkers: cpus().length,
@@ -106,20 +106,22 @@ export class FirehoseSubscription {
       return
     }
 
-    console.log(
-      `avg latency: ${(avgLatency / 60_000).toFixed(0)}m ${(avgLatency / 1000).toFixed(2)}s`,
-    )
-
     const newTotalProcessed = workerStats.reduce(
       (a, b) => a + b.processedCount,
       0,
     )
-    if (this.totalProcessed) {
-      const processedRate =
-        (newTotalProcessed - this.totalProcessed) /
-        (this.settings.scaleCheckIntervalMs / 1000)
-      console.log(`processed rate: ${processedRate.toFixed(0)}/s`)
+
+    if (avgLatency > this.settings.targetLatencyMs * 0.8) {
+      let log = `avg latency: ${(avgLatency / 1000).toFixed(3)}s`
+      if (this.totalProcessed) {
+        const processedRate =
+          (newTotalProcessed - this.totalProcessed) /
+          (this.settings.scaleCheckIntervalMs / 1000)
+        log += `\t—\tprocessed: ${processedRate.toFixed(0)}/s`
+      }
+      console.log(log)
     }
+
     this.totalProcessed = newTotalProcessed
 
     // Scale up if we're falling behind
