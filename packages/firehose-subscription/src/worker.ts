@@ -1,7 +1,7 @@
 import { parentPort } from 'node:worker_threads'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
-import { IdResolver } from '@atproto/identity'
+import { IdResolver, MemoryCache } from '@atproto/identity'
 import { WriteOpAction } from '@atproto/repo'
 import {
   Event,
@@ -43,7 +43,10 @@ parentPort.on('message', async (msg: WorkerMessage) => {
   try {
     if (msg.type === 'init') {
       const db = new Database(msg.dbOptions)
-      idResolver = new IdResolver(msg.idResolverOptions)
+      idResolver = new IdResolver({
+        ...msg.idResolverOptions,
+        didCache: new MemoryCache(),
+      })
       background = new BackgroundQueue(db)
       indexingSvc = new IndexingService(db, idResolver, background)
       stats.ready = true
