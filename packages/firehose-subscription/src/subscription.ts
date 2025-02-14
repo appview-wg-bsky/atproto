@@ -1,4 +1,5 @@
 import { cpus } from 'node:os'
+import * as path from 'node:path'
 import { Worker } from 'node:worker_threads'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
@@ -8,6 +9,8 @@ import {
   WorkerResponse,
   WorkerStats,
 } from './types'
+
+const WORKER_PATH = path.join(__dirname, 'worker.js')
 
 export class FirehoseSubscription {
   private workers: Worker[] = []
@@ -41,7 +44,7 @@ export class FirehoseSubscription {
   }
 
   private addWorker() {
-    const worker = new Worker('./worker.js')
+    const worker = new Worker(WORKER_PATH)
     this.workers.push(worker)
     this.setupWorker(worker)
   }
