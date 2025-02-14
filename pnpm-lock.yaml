@@ -577,6 +577,34 @@ importers:
         specifier: ^5.6.3
         version: 5.8.2
 
+  packages/firehose-subscription:
+    dependencies:
+      '@atproto/bsky':
+        specifier: workspace:^
+        version: link:../bsky
+      '@atproto/identity':
+        specifier: workspace:^
+        version: link:../identity
+      '@atproto/lexicon':
+        specifier: workspace:^
+        version: link:../lexicon
+      '@atproto/repo':
+        specifier: workspace:^
+        version: link:../repo
+      '@atproto/sync':
+        specifier: workspace:^
+        version: link:../sync
+      '@atproto/xrpc-server':
+        specifier: workspace:^
+        version: link:../xrpc-server
+      multiformats:
+        specifier: ^9.9.0
+        version: 9.9.0
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.6.3
+
   packages/identity:
     dependencies:
       '@atproto/common-web':
@@ -1839,9 +1867,15 @@ importers:
 
   services/bsky-indexer:
     dependencies:
+<<<<<<< HEAD
       '@futuristick/bsky-indexer':
         specifier: workspace:^
         version: link:../../packages/bsky-indexer
+=======
+      '@futuristick/firehose-subscription':
+        specifier: workspace:^
+        version: link:../../packages/firehose-subscription
+>>>>>>> 8ec38cd33 (Testing)
 
   services/bsync:
     dependencies:

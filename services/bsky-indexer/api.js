@@ -3,29 +3,31 @@
 
 'use strict'
 
-const bsky = require('@atproto/bsky')
-const { IdResolver } = require('@atproto/identity')
+const { FirehoseSubscription } = require('@futuristick/firehose-subscription')
 
 const main = async () => {
   const env = getEnv()
 
-  const db = new bsky.Database({
+  const dbOptions = {
     url: env.dbPostgresUrl,
     schema: env.dbPostgresSchema,
-    poolSize: env.poolSize ?? 3000,
-  })
+    poolSize: env.poolSize ?? 500,
+  }
 
-  const idResolver = new IdResolver({
+  const idResolverOptions = {
     plcUrl: env.didPlcUrl,
-  })
+  }
 
-  const sub = new bsky.RepoSubscription({
+  const sub = new FirehoseSubscription({
     service: env.repoProvider,
-    db,
-    idResolver: idResolver,
+    dbOptions,
+    idResolverOptions,
+    minWorkers: 4,
+    maxWorkers: 16,
+    onError: (err) => console.error(err),
   })
 
-  sub.start()
+  void sub.start()
 
   process.on('SIGTERM', sub.destroy)
   process.on('disconnect', sub.destroy)
@@ -37,7 +39,9 @@ const getEnv = () => ({
   repoProvider: process.env.BSKY_REPO_PROVIDER || undefined,
   didPlcUrl:
     process.env.BSKY_DID_PLC_URL || process.env.DID_PLC_URL || undefined,
-  poolSize: process.env.WORKER_DB_POOL_SIZE || undefined,
+  poolSize: process.env.BSKY_DB_POOL_SIZE
+    ? parseInt(process.env.BSKY_DB_POOL_SIZE)
+    : undefined,
 })
 
-main()
+void main()
