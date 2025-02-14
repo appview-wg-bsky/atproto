@@ -107,7 +107,9 @@ async function parseEvt(evt: RepoEvent): Promise<Event[]> {
       return []
     }
   } catch (err) {
-    console.error('parse error', err)
+    if (err instanceof Error && err.name === 'AbortError') {
+      return []
+    }
     parentPort?.postMessage({
       type: 'error',
       error: new FirehoseParseError(err, evt),
