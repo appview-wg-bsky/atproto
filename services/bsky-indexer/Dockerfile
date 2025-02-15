@@ -12,8 +12,7 @@ COPY ./*.* ./
 # NOTE bsky's transitive dependencies go here: if that changes, this needs to be updated.
 COPY ./tsconfig ./tsconfig
 COPY ./packages/bsky ./packages/bsky
-COPY ./packages/bsky-indexer ./packages/bsky-indexer
-COPY ./packages/firehose-subscription ./packages/firehose-subscription
+COPY ./packages/indexer ./packages/indexer
 COPY ./packages/api ./packages/api
 COPY ./packages/common ./packages/common
 COPY ./packages/common-web ./packages/common-web

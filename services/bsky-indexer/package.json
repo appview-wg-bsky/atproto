@@ -3,6 +3,6 @@
   "private": true,
   "packageManager": "pnpm@8.15.9",
   "dependencies": {
-    "@futuristick/firehose-subscription": "workspace:^"
+    "@futuristick/bsky-indexer": "workspace:^"
   }
 }
