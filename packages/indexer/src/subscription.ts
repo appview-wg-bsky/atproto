@@ -37,7 +37,6 @@ export class FirehoseSubscription {
     if (this.opts.scaleCheckIntervalMs)
       this.settings.scaleCheckIntervalMs = this.opts.scaleCheckIntervalMs
 
-    // Initialize minimum workers
     for (let i = 0; i < this.settings.minWorkers; i++) {
       this.addWorker()
     }
@@ -191,7 +190,7 @@ export class FirehoseSubscription {
       this.opts.onError?.(new FirehoseSubscriptionError(err))
       if (!this.destroyed) {
         this.ws?.ws?.close()
-        await this.start() // Restart subscription
+        await this.start()
       }
     }
   }

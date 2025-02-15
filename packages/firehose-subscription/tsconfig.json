@@ -1,6 +1,0 @@
-{
-  "include": [],
-  "references": [
-    { "path": "./tsconfig.build.json" }
-  ]
-}
