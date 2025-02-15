@@ -75,7 +75,7 @@ export class FirehoseSubscription {
 
   private replaceWorker(workerId: number) {
     if (!this.destroyed) {
-      const newWorker = new Worker('./worker.js')
+      const newWorker = new Worker(WORKER_PATH)
       this.setupWorker(newWorker, workerId)
       this.workers[workerId] = newWorker
     }

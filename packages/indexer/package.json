@@ -1,6 +1,6 @@
 {
   "name": "@futuristick/bsky-indexer",
-  "version": "0.0.116",
+  "version": "0.0.116-4",
   "license": "MIT",
   "description": "Ingests relay data into the Bluesky AppView.",
   "keywords": [
