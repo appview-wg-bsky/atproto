@@ -172,6 +172,7 @@ export class FirehoseSubscription {
         },
       })
 
+      if (this.scaleCheckInterval) clearInterval(this.scaleCheckInterval)
       this.scaleCheckInterval = setInterval(
         () => this.checkScaling(),
         this.settings.scaleCheckIntervalMs,
