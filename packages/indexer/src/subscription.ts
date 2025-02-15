@@ -116,7 +116,7 @@ export class FirehoseSubscription {
         const processedRate =
           (newTotalProcessed - this.totalProcessed) /
           (this.settings.scaleCheckIntervalMs / 1000)
-        log += `\t—\tprocessed: ${processedRate.toFixed(0)}/s`
+        log += `\t\tprocessed: ${processedRate.toFixed(0)}/s`
       }
       console.log(log)
     }
