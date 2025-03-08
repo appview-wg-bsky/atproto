@@ -156,13 +156,15 @@ export class FirehoseSubscription {
         this.settings.minWorkers,
         Math.ceil(this.workers.length * 0.75), // Remove 25% of workers
       )
+
       console.log(
         `killing ${this.workers.length - targetWorkers} workers for a total of ${targetWorkers}`,
       )
-      while (this.workers.length > targetWorkers) {
-        const worker = this.workers.pop()
-        worker?.terminate()
-      }
+
+      const toTerminate = this.workers.splice(targetWorkers)
+      Promise.all(toTerminate.map((worker) => worker.terminate())).then(() => {
+        console.log(`killed ${toTerminate.length} workers`)
+      })
     }
   }
 
