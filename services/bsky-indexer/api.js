@@ -8,10 +8,12 @@ const { FirehoseSubscription } = require('@futuristick/bsky-indexer')
 const main = async () => {
   const env = getEnv()
 
+  /** @type {PgOptions} */
   const dbOptions = {
     url: env.dbPostgresUrl,
     schema: env.dbPostgresSchema,
     poolSize: env.poolSize ?? 500,
+    poolIdleTimeoutMs: 30_000,
   }
 
   const idResolverOptions = {
