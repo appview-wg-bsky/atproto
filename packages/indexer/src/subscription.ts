@@ -19,6 +19,7 @@ export class FirehoseSubscription {
   private destroyed = false
   private currentWorker = 0
   private scaleCheckInterval: NodeJS.Timeout | null = null
+  private needsToScale = 0
 
   private totalProcessed = 0
 
@@ -128,6 +129,11 @@ export class FirehoseSubscription {
       avgLatency > this.settings.targetLatencyMs &&
       this.workers.length < this.settings.maxWorkers
     ) {
+      // Only scale up if we've been waiting for 3 cycles
+      this.needsToScale++
+      if (this.needsToScale < 3) return
+      this.needsToScale = 0
+
       const newWorkersCount = Math.min(
         this.settings.maxWorkers,
         this.workers.length + Math.ceil(this.workers.length * 0.5), // Add 50% more workers
@@ -173,10 +179,13 @@ export class FirehoseSubscription {
       })
 
       if (this.scaleCheckInterval) clearInterval(this.scaleCheckInterval)
-      this.scaleCheckInterval = setInterval(
-        () => this.checkScaling(),
-        this.settings.scaleCheckIntervalMs,
-      )
+      // Only start the scale check after 30 seconds, to give the workers time to get going
+      setTimeout(() => {
+        this.scaleCheckInterval = setInterval(
+          () => this.checkScaling(),
+          this.settings.scaleCheckIntervalMs,
+        )
+      }, 30_000)
 
       for await (const chunk of this.ws) {
         if (this.destroyed) break
