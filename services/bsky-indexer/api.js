@@ -26,7 +26,7 @@ const main = async () => {
     dbOptions,
     idResolverOptions,
     minWorkers: 4,
-    maxWorkers: 16,
+    maxWorkers: 12,
     onError: (err) =>
       console.error(...(err.cause ? [err.message, err.cause] : [err])),
   })
