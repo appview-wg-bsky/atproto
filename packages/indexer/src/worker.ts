@@ -40,7 +40,12 @@ parentPort.on('message', async (msg: WorkerMessage) => {
   try {
     if (msg.type === 'init') {
       const db = new Database(msg.dbOptions)
-      redis = new Redis(msg.redisOptions)
+      // :/
+      if (typeof msg.redisOptions === 'string') {
+        redis = new Redis(msg.redisOptions)
+      } else {
+        redis = new Redis(msg.redisOptions)
+      }
       idResolver = new IdResolver({
         ...msg.idResolverOptions,
         didCache: new MemoryCache(),
