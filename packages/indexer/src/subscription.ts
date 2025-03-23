@@ -134,13 +134,17 @@ export class FirehoseSubscription {
   }
 
   async start() {
-    await this.redis.xgroup(
-      'CREATE',
-      REDIS_STREAM_NAME,
-      REDIS_GROUP_NAME,
-      '$',
-      'MKSTREAM',
-    )
+    try {
+      await this.redis.xgroup(
+        'CREATE',
+        REDIS_STREAM_NAME,
+        REDIS_GROUP_NAME,
+        '$',
+        'MKSTREAM',
+      )
+    } catch {
+      // will throw if the stream already exists
+    }
 
     const recoverFromCursor = await this.redis
       .xrange(REDIS_STREAM_NAME, '-', '+', 'COUNT', 1)
