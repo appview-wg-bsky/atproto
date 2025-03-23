@@ -25,6 +25,7 @@ const main = async () => {
     service: env.repoProvider,
     dbOptions,
     idResolverOptions,
+    redisOptions: env.redisUrl,
     minWorkers: 4,
     maxWorkers: 12,
     onError: (err) =>
@@ -43,6 +44,7 @@ const getEnv = () => ({
   repoProvider: process.env.BSKY_REPO_PROVIDER || undefined,
   didPlcUrl:
     process.env.BSKY_DID_PLC_URL || process.env.DID_PLC_URL || undefined,
+  redisUrl: process.env.REDIS_URL || undefined,
   poolSize: process.env.BSKY_DB_POOL_SIZE
     ? parseInt(process.env.BSKY_DB_POOL_SIZE)
     : undefined,

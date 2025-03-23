@@ -1,6 +1,9 @@
 import { parentPort } from 'node:worker_threads'
+import { Redis } from 'ioredis'
+import PQueue from 'p-queue'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
+import { parseIntWithFallback } from '@atproto/common'
 import { IdResolver, MemoryCache } from '@atproto/identity'
 import { WriteOpAction } from '@atproto/repo'
 import {
@@ -19,71 +22,31 @@ import {
   isIdentity,
   isValidRepoEvent,
 } from './lexicons'
-import { WorkerMessage, WorkerResponse, WorkerStats } from './types'
+import { REDIS_GROUP_NAME, REDIS_STREAM_NAME } from './subscription'
+import { WorkerMessage, WorkerResponse } from './types'
 
 if (!parentPort) {
   throw new Error('Must be run as a worker')
 }
 
-const stats: WorkerStats = {
-  ready: false,
-  processedCount: 0,
-  avgProcessingTimeMs: 0,
-  currentLatencyMs: 0,
-}
-
-let processingTimes: number[] = [] // Rolling window of processing times
-const MAX_TIMES_WINDOW = 100
-
+let redis: Redis
 let indexingSvc: IndexingService
 let background: BackgroundQueue
 let idResolver: IdResolver
+
+const queue = new PQueue({ concurrency: 50 })
 
 parentPort.on('message', async (msg: WorkerMessage) => {
   try {
     if (msg.type === 'init') {
       const db = new Database(msg.dbOptions)
+      redis = new Redis(msg.redisOptions)
       idResolver = new IdResolver({
         ...msg.idResolverOptions,
         didCache: new MemoryCache(),
       })
       background = new BackgroundQueue(db)
       indexingSvc = new IndexingService(db, idResolver, background)
-      stats.ready = true
-      parentPort?.postMessage({ type: 'stats', stats } satisfies WorkerResponse)
-    } else if (msg.type === 'chunk') {
-      if (!indexingSvc) {
-        throw new Error('Worker not initialized')
-      }
-
-      const start = Date.now()
-
-      const message = ensureChunkIsMessage(msg.data)
-      const t = message.header.t
-      const clone: Record<string, unknown> | undefined =
-        message.body !== undefined ? { ...message.body } : undefined
-      if (clone !== undefined && t !== undefined) {
-        clone['$type'] = t.startsWith('#')
-          ? 'com.atproto.sync.subscribeRepos' + t
-          : t
-      }
-
-      let event: RepoEvent
-      try {
-        event = isValidRepoEvent(clone)
-        if (event === undefined) throw new Error('empty event')
-      } catch (err) {
-        parentPort?.postMessage({
-          type: 'error',
-          error: new FirehoseWorkerError(err),
-        } satisfies WorkerResponse)
-        return
-      }
-
-      const parsed = await parseEvt(event)
-      await Promise.all(
-        parsed.map((ev) => processEvent(ev).then(() => updateStats(ev, start))),
-      )
     }
   } catch (err) {
     parentPort?.postMessage({
@@ -92,6 +55,134 @@ parentPort.on('message', async (msg: WorkerMessage) => {
     } satisfies WorkerResponse)
   }
 })
+
+async function main() {
+  let cursor: string | null = null
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { id, message, cursor: nextCursor } = await readNextMessage(cursor)
+    if (id && message) {
+      await queueMessage(id, message)
+    }
+    cursor = nextCursor
+  }
+}
+
+async function readNextMessage(cursor: string | null = null) {
+  let id: string | null, message: string | null
+
+  try {
+    // First try to claim unclaimed messages
+    // [cursor, [[id, ['message', message]]]]
+    let res = await redis
+      .xautoclaim(
+        REDIS_STREAM_NAME,
+        REDIS_GROUP_NAME,
+        `${process.pid}`,
+        60_000,
+        cursor || '0-0',
+        'COUNT',
+        1,
+      )
+      .then((res: any[]) => {
+        cursor = res?.[0] ?? null
+        return res?.[1]?.[0]
+      })
+
+    if (!res?.length || res.length < 2 || !res[1]?.[1]) {
+      // If there's nothing, read from the stream
+      // [[REDIS_STREAM_NAME, [[id, ['message', message]]]]]
+      res = await redis
+        .xreadgroup(
+          'GROUP',
+          REDIS_GROUP_NAME,
+          `${process.pid}`,
+          'COUNT',
+          1,
+          'BLOCK',
+          5000,
+          'STREAMS',
+          REDIS_STREAM_NAME,
+          '>',
+        )
+        .then((res: any[]) => res?.[0]?.[1]?.[0])
+
+      if (!res?.length || res.length < 2 || !res[1]?.[1]) {
+        throw 0
+      }
+    }
+
+    id = res[0]
+    message = res[1][1]
+  } catch (err) {
+    return { id: null, message: null, cursor: cursor || '0-0' }
+  }
+
+  return {
+    id: id || null,
+    message: message?.length ? Buffer.from(message, 'utf8') : null,
+    cursor: cursor || '0-0',
+  }
+}
+
+async function queueMessage(id: string, message: Buffer) {
+  const seq = parseIntWithFallback(
+    id.includes('-') ? id.split('-').shift() : id,
+    null,
+  )
+  if (!seq) return
+
+  await queue.onSizeLessThan(1000)
+
+  void queue.add(
+    () =>
+      handleMessage(seq, message)
+        .then(() => redis.xack(REDIS_STREAM_NAME, REDIS_GROUP_NAME, seq))
+        .catch((err) =>
+          parentPort?.postMessage({
+            type: 'error',
+            error: new FirehoseWorkerError(err),
+          } satisfies WorkerResponse),
+        ),
+    {
+      // earlier messages are more important
+      priority: Number.MAX_SAFE_INTEGER - seq,
+    },
+  )
+}
+
+async function handleMessage(seq: number, msg: Buffer) {
+  if (!indexingSvc) {
+    throw new Error('Worker not initialized')
+  }
+
+  const message = ensureChunkIsMessage(msg)
+  const t = message.header.t
+  const clone: Record<string, unknown> | undefined =
+    message.body !== undefined ? { ...message.body } : undefined
+  if (clone !== undefined && t !== undefined) {
+    clone['$type'] = t.startsWith('#')
+      ? 'com.atproto.sync.subscribeRepos' + t
+      : t
+  }
+
+  let event: RepoEvent
+  try {
+    event = isValidRepoEvent(clone)
+    if (event === undefined) throw new Error('empty event')
+  } catch (err) {
+    parentPort?.postMessage({
+      type: 'error',
+      error: new FirehoseWorkerError(err),
+    } satisfies WorkerResponse)
+    return
+  }
+
+  const parsed = await parseEvt(event)
+  for (const evt of parsed) {
+    await processEvent(evt)
+  }
+}
 
 async function parseEvt(evt: RepoEvent): Promise<Event[]> {
   try {
@@ -156,23 +247,4 @@ async function processEvent(evt: Event) {
       indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
     ])
   }
-}
-
-function updateStats(evt: Event, start: number) {
-  const processingTime = Date.now() - start
-  processingTimes.push(processingTime)
-  if (processingTimes.length > MAX_TIMES_WINDOW) {
-    processingTimes = processingTimes.slice(-MAX_TIMES_WINDOW)
-  }
-
-  stats.processedCount++
-  stats.avgProcessingTimeMs =
-    processingTimes.reduce((a, b) => a + b, 0) / processingTimes.length
-  stats.lastEventTime = evt.time
-  stats.currentLatencyMs = Date.now() - new Date(evt.time).getTime()
-
-  parentPort?.postMessage({
-    type: 'stats',
-    stats,
-  } satisfies WorkerResponse)
 }

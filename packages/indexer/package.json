@@ -1,6 +1,6 @@
 {
   "name": "@futuristick/bsky-indexer",
-  "version": "0.0.116-4",
+  "version": "0.0.116-5",
   "license": "MIT",
   "description": "Ingests relay data into the Bluesky AppView.",
   "keywords": [
@@ -21,12 +21,15 @@
   },
   "dependencies": {
     "@atproto/bsky": "workspace:^",
-    "@atproto/lexicon": "workspace:^",
+    "@atproto/common": "workspace:^",
     "@atproto/identity": "workspace:^",
+    "@atproto/lexicon": "workspace:^",
     "@atproto/repo": "workspace:^",
     "@atproto/sync": "workspace:^",
     "@atproto/xrpc-server": "workspace:^",
-    "multiformats": "^9.9.0"
+    "ioredis": "^5.3.2",
+    "multiformats": "^9.9.0",
+    "p-queue": "^8.1.0"
   },
   "devDependencies": {
     "typescript": "^5.6.3"
