@@ -137,7 +137,17 @@ async function queueMessage(id: string, message: Buffer) {
   )
   if (!seq) return
 
-  await queue.onSizeLessThan(1000)
+  while (queue.size >= 1000) {
+    await new Promise<void>((resolve) => {
+      const listener = () => {
+        if (queue.size < 1000) {
+          queue.off('next', listener)
+          resolve()
+        }
+      }
+      queue.on('next', listener)
+    })
+  }
 
   void queue.add(
     () =>
