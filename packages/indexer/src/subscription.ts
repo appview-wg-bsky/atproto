@@ -142,13 +142,9 @@ export class FirehoseSubscription {
       'MKSTREAM',
     )
 
-    const [[recoverFromCursor]] = await this.redis.xrange(
-      REDIS_STREAM_NAME,
-      '-',
-      '+',
-      'COUNT',
-      1,
-    )
+    const recoverFromCursor = await this.redis
+      .xrange(REDIS_STREAM_NAME, '-', '+', 'COUNT', 1)
+      .then((res) => res?.[0]?.[0])
 
     try {
       this.ws = new WebSocketKeepAlive({
