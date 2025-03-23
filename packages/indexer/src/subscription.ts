@@ -1,31 +1,31 @@
 import { cpus } from 'node:os'
 import * as path from 'node:path'
 import { Worker } from 'node:worker_threads'
+import { Redis } from 'ioredis'
+import { cborDecodeMulti } from '@atproto/common'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
 import {
   FirehoseSubscriptionOptions,
   WorkerMessage,
   WorkerResponse,
-  WorkerStats,
 } from './types'
 
 const WORKER_PATH = path.join(__dirname, 'worker.js')
+export const REDIS_STREAM_NAME = 'bsky_indexer:firehose'
+export const REDIS_GROUP_NAME = 'bsky_indexer_consumers'
 
 export class FirehoseSubscription {
+  private redis: Redis
   private workers: Worker[] = []
-  private workerStats: Map<number, WorkerStats> = new Map()
   private ws: WebSocketKeepAlive | null = null
   private destroyed = false
-  private currentWorker = 0
   private scaleCheckInterval: NodeJS.Timeout | null = null
   private needsToScale = 0
-
-  private totalProcessed = 0
+  private totalPending = 0
 
   private settings = {
-    targetLatencyMs: 5_000,
-    scaleCheckIntervalMs: 10_000,
+    scaleCheckIntervalMs: 5_000,
     minWorkers: 2,
     maxWorkers: cpus().length,
   }
@@ -33,10 +33,15 @@ export class FirehoseSubscription {
   constructor(private opts: FirehoseSubscriptionOptions) {
     if (this.opts.minWorkers) this.settings.minWorkers = this.opts.minWorkers
     if (this.opts.maxWorkers) this.settings.maxWorkers = this.opts.maxWorkers
-    if (this.opts.targetLatencyMs)
-      this.settings.targetLatencyMs = this.opts.targetLatencyMs
     if (this.opts.scaleCheckIntervalMs)
       this.settings.scaleCheckIntervalMs = this.opts.scaleCheckIntervalMs
+
+    // :/
+    if (typeof this.opts.redisOptions === 'string') {
+      this.redis = new Redis(this.opts.redisOptions)
+    } else {
+      this.redis = new Redis(this.opts.redisOptions)
+    }
 
     for (let i = 0; i < this.settings.minWorkers; i++) {
       this.addWorker()
@@ -56,25 +61,25 @@ export class FirehoseSubscription {
     worker.postMessage({
       type: 'init',
       dbOptions: this.opts.dbOptions,
+      redisOptions: this.opts.redisOptions,
       idResolverOptions: this.opts.idResolverOptions ?? {},
     } satisfies WorkerMessage)
 
     worker.on('message', (msg: WorkerResponse) => {
-      const stats = this.workerStats.get(workerId)
       if (msg.type === 'error') {
         this.opts.onError?.(msg.error)
-      } else if (msg.type === 'stats') {
-        this.workerStats.set(workerId, { ...stats, ...msg.stats, ready: true })
       }
     })
 
     worker.on('error', (err) => {
       this.opts.onError?.(new FirehoseWorkerError(err))
-      this.replaceWorker(workerId)
+      this.replaceWorker(workerId, worker)
     })
   }
 
-  private replaceWorker(workerId: number) {
+  private replaceWorker(workerId: number, worker: Worker) {
+    void worker.terminate()
+
     if (!this.destroyed) {
       const newWorker = new Worker(WORKER_PATH)
       this.setupWorker(newWorker, workerId)
@@ -82,57 +87,26 @@ export class FirehoseSubscription {
     }
   }
 
-  private async getNextWorker(): Promise<Worker> {
-    const worker = this.workers[this.currentWorker]
-    this.currentWorker = (this.currentWorker + 1) % this.workers.length
-    if (!worker) {
-      await new Promise((resolve) => setTimeout(resolve, 100))
-      return this.getNextWorker()
-    }
-    return worker
-  }
-
-  private checkScaling() {
+  private async checkScaling() {
     if (this.workers.length === 0) return
 
-    const workerStats = [...this.workerStats.values()]
-
-    const avgLatency =
-      workerStats.reduce((a, b) => a + (b.currentLatencyMs ?? 0), 0) /
-      workerStats.length
-
-    if (Number.isNaN(avgLatency)) {
-      console.warn('avgLatency is NaN')
-      return
-    }
-
-    const newTotalProcessed = workerStats.reduce(
-      (a, b) => a + b.processedCount,
-      0,
+    const [pending] = await this.redis.xpending(
+      REDIS_STREAM_NAME,
+      REDIS_GROUP_NAME,
     )
+    if (typeof pending !== 'number' || isNaN(pending)) return
 
-    if (avgLatency > this.settings.targetLatencyMs * 0.8) {
-      let log = `avg latency: ${(avgLatency / 1000).toFixed(3)}s`
-      if (this.totalProcessed) {
-        const processedRate =
-          (newTotalProcessed - this.totalProcessed) /
-          (this.settings.scaleCheckIntervalMs / 1000)
-        log += `\t\tprocessed: ${processedRate.toFixed(0)}/s`
-      }
-      console.log(log)
-    }
-
-    this.totalProcessed = newTotalProcessed
-
-    // Scale up if we're falling behind
-    if (
-      avgLatency > this.settings.targetLatencyMs &&
-      this.workers.length < this.settings.maxWorkers
-    ) {
-      // Only scale up if we've been waiting for 3 cycles
+    if (pending > this.totalPending) {
       this.needsToScale++
-      if (this.needsToScale < 3) return
-      this.needsToScale = 0
+    } else this.needsToScale = Math.max(0, this.needsToScale - 1)
+    this.totalPending = pending
+
+    // Scale up if the pending count has increased for the last 3 cycles
+    if (this.needsToScale >= 3) {
+      if (this.workers.length >= this.settings.maxWorkers) {
+        console.warn(`pending count ${pending} but max workers reached`)
+        return
+      }
 
       const newWorkersCount = Math.min(
         this.settings.maxWorkers,
@@ -146,35 +120,41 @@ export class FirehoseSubscription {
       }
       return
     }
-
     // Scale down if we're well ahead
-    if (
-      avgLatency < this.settings.targetLatencyMs / 2 &&
-      this.workers.length > this.settings.minWorkers
-    ) {
-      const targetWorkers = Math.max(
-        this.settings.minWorkers,
-        Math.ceil(this.workers.length * 0.75), // Remove 25% of workers
-      )
+    else if (pending < 500 && this.workers.length > this.settings.minWorkers) {
+      const targetWorkers = this.workers.length - 1
+      if (targetWorkers < this.settings.minWorkers) return
 
-      console.log(
-        `killing ${this.workers.length - targetWorkers} workers for a total of ${targetWorkers}`,
-      )
-
-      const toTerminate = this.workers.splice(targetWorkers)
-      Promise.all(toTerminate.map((worker) => worker.terminate())).then(() => {
-        console.log(`killed ${toTerminate.length} workers`)
-      })
+      console.log(`killing 1 worker for a total of ${targetWorkers}`)
+      const toTerminate = this.workers.pop()
+      if (!toTerminate) return
+      await toTerminate.terminate()
+      console.log(`killed worker ${toTerminate.threadId}`)
     }
   }
 
   async start() {
+    await this.redis.xgroup(
+      'CREATE',
+      REDIS_STREAM_NAME,
+      REDIS_GROUP_NAME,
+      '$',
+      'MKSTREAM',
+    )
+
+    const [[recoverFromCursor]] = await this.redis.xrange(
+      REDIS_STREAM_NAME,
+      '-',
+      '+',
+      'COUNT',
+      1,
+    )
+
     try {
       this.ws = new WebSocketKeepAlive({
         getUrl: async () => {
-          const params = this.opts.cursor
-            ? { cursor: `${this.opts.cursor}` }
-            : undefined
+          const cursor = recoverFromCursor || `${this.opts.cursor}`
+          const params = cursor ? { cursor } : undefined
           const query = new URLSearchParams(params).toString()
           return `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos${query ? '?' + query : ''}`
         },
@@ -191,11 +171,8 @@ export class FirehoseSubscription {
 
       for await (const chunk of this.ws) {
         if (this.destroyed) break
-
-        const worker = await this.getNextWorker()
-        worker.postMessage({
-          type: 'chunk',
-          data: chunk,
+        void this.handleMessage(chunk).catch((err) => {
+          this.opts.onError?.(new FirehoseSubscriptionError(err))
         })
       }
     } catch (err) {
@@ -204,6 +181,21 @@ export class FirehoseSubscription {
         this.ws?.ws?.close()
         await this.start()
       }
+    }
+  }
+
+  async handleMessage(chunk: Uint8Array) {
+    const decoded = cborDecodeMulti(chunk)
+    const seq = (decoded?.[1] as any)?.seq
+    if (seq !== undefined) {
+      await this.redis.xaddBuffer(
+        REDIS_STREAM_NAME,
+        'MAXLEN',
+        '~',
+        20_000,
+        seq,
+        Buffer.from(chunk),
+      )
     }
   }
 
