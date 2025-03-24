@@ -25,6 +25,12 @@ import {
 import { REDIS_GROUP_NAME, REDIS_STREAM_NAME } from './subscription'
 import { WorkerMessage, WorkerResponse } from './types'
 
+interface Message {
+  id: string | null
+  seq: number | null
+  data: Buffer | null
+}
+
 if (!parentPort) {
   throw new Error('Must be run as a worker')
 }
@@ -61,24 +67,33 @@ parentPort.on('message', async (msg: WorkerMessage) => {
   }
 })
 
+void main()
+
 async function main() {
   let cursor: string | null = null
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const { id, message, cursor: nextCursor } = await readNextMessage(cursor)
-    if (id && message) {
-      await queueMessage(id, message)
-    }
+    const { cursor: nextCursor, ...message } = await readNextMessage(cursor)
+    await queueMessage(message)
     cursor = nextCursor
   }
 }
 
-async function readNextMessage(cursor: string | null = null) {
-  let id: string | null, message: string | null
+async function readNextMessage(cursor: string | null = null): Promise<
+  Message & {
+    cursor: string | null
+  }
+> {
+  const ret: Message & { cursor: string | null } = {
+    id: null,
+    seq: null,
+    data: null,
+    cursor: null,
+  }
 
   try {
     // First try to claim unclaimed messages
-    // [cursor, [[id, ['message', message]]]]
+    // [cursor, [[id, ['seq', seq, 'data', data]]]]
     let res = await redis
       .xautoclaim(
         REDIS_STREAM_NAME,
@@ -90,13 +105,13 @@ async function readNextMessage(cursor: string | null = null) {
         1,
       )
       .then((res: any[]) => {
-        cursor = res?.[0] ?? null
+        ret.cursor = res?.[0] ?? null
         return res?.[1]?.[0]
       })
 
-    if (!res?.length || res.length < 2 || !res[1]?.[1]) {
+    if (!res?.length || !res[1]) {
       // If there's nothing, read from the stream
-      // [[REDIS_STREAM_NAME, [[id, ['message', message]]]]]
+      // [[REDIS_STREAM_NAME, [[id, ['seq', seq, 'data', data]]]]]
       res = await redis
         .xreadgroup(
           'GROUP',
@@ -112,47 +127,36 @@ async function readNextMessage(cursor: string | null = null) {
         )
         .then((res: any[]) => res?.[0]?.[1]?.[0])
 
-      if (!res?.length || res.length < 2 || !res[1]?.[1]) {
+      if (!res?.length || !res[1]) {
         throw 0
       }
     }
 
-    id = res[0]
-    message = res[1][1]
-  } catch (err) {
-    return { id: null, message: null, cursor: cursor || '0-0' }
+    const [id, msg] = res
+    ret.id = id
+    ret.seq = isNaN(msg[1]) ? null : parseInt(msg[1])
+    ret.data = msg[3]?.length ? Buffer.from(msg[3], 'base64') : null
+  } catch {
+    // will return ret as is */
   }
 
-  return {
-    id: id || null,
-    message: message?.length ? Buffer.from(message, 'utf8') : null,
-    cursor: cursor || '0-0',
-  }
+  ret.cursor ||= '0-0'
+
+  return ret
 }
 
-async function queueMessage(id: string, message: Buffer) {
-  const seq = parseIntWithFallback(
-    id.includes('-') ? id.split('-').shift() : id,
-    null,
-  )
-  if (!seq) return
-
-  while (queue.size >= 1000) {
-    await new Promise<void>((resolve) => {
-      const listener = () => {
-        if (queue.size < 1000) {
-          queue.off('next', listener)
-          resolve()
-        }
-      }
-      queue.on('next', listener)
-    })
+async function queueMessage({ id, seq, data }: Message) {
+  if (!id || !seq || !data) {
+    console.warn('invalid message', id, seq, data)
+    return
   }
+
+  await waitUntilQueueLessThan(1000)
 
   void queue.add(
     () =>
-      handleMessage(seq, message)
-        .then(() => redis.xack(REDIS_STREAM_NAME, REDIS_GROUP_NAME, seq))
+      handleMessage(data)
+        .then(() => redis.xack(REDIS_STREAM_NAME, REDIS_GROUP_NAME, id))
         .catch((err) =>
           parentPort?.postMessage({
             type: 'error',
@@ -166,7 +170,7 @@ async function queueMessage(id: string, message: Buffer) {
   )
 }
 
-async function handleMessage(seq: number, msg: Buffer) {
+async function handleMessage(msg: Buffer) {
   if (!indexingSvc) {
     throw new Error('Worker not initialized')
   }
@@ -262,4 +266,16 @@ async function processEvent(evt: Event) {
       indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
     ])
   }
+}
+
+async function waitUntilQueueLessThan(size: number) {
+  return new Promise<void>((resolve) => {
+    const listener = () => {
+      if (queue.size < size) {
+        queue.off('next', listener)
+        resolve()
+      }
+    }
+    queue.on('next', listener)
+  })
 }
