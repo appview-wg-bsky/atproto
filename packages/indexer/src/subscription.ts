@@ -146,15 +146,19 @@ export class FirehoseSubscription {
       // will throw if the stream already exists
     }
 
-    const recoverFromCursor = await this.redis
+    const recoverFromId = await this.redis
       .xrange(REDIS_STREAM_NAME, '-', '+', 'COUNT', 1)
       .then((res) => res?.[0]?.[0])
+    const initialCursor = recoverFromId?.includes('-')
+      ? recoverFromId.split('-').shift()
+      : null
 
     try {
       this.ws = new WebSocketKeepAlive({
         getUrl: async () => {
-          const cursor = recoverFromCursor || `${this.opts.cursor}`
-          const params = cursor ? { cursor } : undefined
+          const cursor = initialCursor || `${this.opts.cursor}`
+          const params =
+            cursor && !isNaN(parseInt(cursor)) ? { cursor } : undefined
           const query = new URLSearchParams(params).toString()
           return `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos${query ? '?' + query : ''}`
         },
