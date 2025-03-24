@@ -198,6 +198,7 @@ export class FirehoseSubscription {
         '~',
         20_000,
         seq,
+        'message',
         Buffer.from(chunk),
       )
     }
