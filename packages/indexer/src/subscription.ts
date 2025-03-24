@@ -192,11 +192,13 @@ export class FirehoseSubscription {
     const decoded = cborDecodeMulti(chunk)
     const seq = (decoded?.[1] as any)?.seq
     if (seq !== undefined) {
-      await this.redis.xaddBuffer(
+      await this.redis.xadd(
         REDIS_STREAM_NAME,
         'MAXLEN',
         '~',
         20_000,
+        '*',
+        'seq',
         seq,
         'data',
         Buffer.from(chunk).toString('base64'),
