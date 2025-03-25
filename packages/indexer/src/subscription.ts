@@ -5,11 +5,7 @@ import { Redis } from 'ioredis'
 import { cborDecodeMulti } from '@atproto/common'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
-import {
-  FirehoseSubscriptionOptions,
-  WorkerMessage,
-  WorkerResponse,
-} from './types'
+import { FirehoseSubscriptionOptions, WorkerResponse } from './types'
 
 const WORKER_PATH = path.join(__dirname, 'worker.js')
 export const REDIS_STREAM_NAME = 'bsky_indexer:firehose'
@@ -44,26 +40,27 @@ export class FirehoseSubscription {
     }
 
     for (let i = 0; i < this.settings.minWorkers; i++) {
-      this.addWorker()
+      this.setupWorker()
     }
   }
 
-  private addWorker() {
-    const worker = new Worker(WORKER_PATH)
-    this.workers.push(worker)
-    this.setupWorker(worker)
-  }
+  private setupWorker(workerId?: number) {
+    if (workerId !== undefined) void this.workers[workerId]?.terminate()
 
-  private setupWorker(worker: Worker, workerId?: number) {
-    workerId ??= this.workers.indexOf(worker)
-    if (workerId === -1) throw new Error('Worker not found')
+    const { dbOptions, redisOptions, idResolverOptions } = this.opts
+    const worker = new Worker(WORKER_PATH, {
+      workerData: {
+        dbOptions,
+        redisOptions,
+        idResolverOptions,
+      },
+    })
 
-    worker.postMessage({
-      type: 'init',
-      dbOptions: this.opts.dbOptions,
-      redisOptions: this.opts.redisOptions,
-      idResolverOptions: this.opts.idResolverOptions ?? {},
-    } satisfies WorkerMessage)
+    if (workerId !== undefined) {
+      this.workers[workerId] = worker
+    } else {
+      workerId = this.workers.push(worker) - 1
+    }
 
     worker.on('message', (msg: WorkerResponse) => {
       if (msg.type === 'error') {
@@ -73,18 +70,8 @@ export class FirehoseSubscription {
 
     worker.on('error', (err) => {
       this.opts.onError?.(new FirehoseWorkerError(err))
-      this.replaceWorker(workerId, worker)
+      this.setupWorker(workerId)
     })
-  }
-
-  private replaceWorker(workerId: number, worker: Worker) {
-    void worker.terminate()
-
-    if (!this.destroyed) {
-      const newWorker = new Worker(WORKER_PATH)
-      this.setupWorker(newWorker, workerId)
-      this.workers[workerId] = newWorker
-    }
   }
 
   private async checkScaling() {
@@ -116,7 +103,7 @@ export class FirehoseSubscription {
         `spawning ${newWorkersCount - this.workers.length} workers for a total of ${newWorkersCount}`,
       )
       while (this.workers.length < newWorkersCount) {
-        this.addWorker()
+        this.setupWorker()
       }
       return
     }
