@@ -1,4 +1,4 @@
-import { parentPort } from 'node:worker_threads'
+import { parentPort, workerData } from 'node:worker_threads'
 import { Redis } from 'ioredis'
 import PQueue from 'p-queue'
 import { BackgroundQueue, Database } from '@atproto/bsky'
@@ -23,7 +23,7 @@ import {
   isValidRepoEvent,
 } from './lexicons'
 import { REDIS_GROUP_NAME, REDIS_STREAM_NAME } from './subscription'
-import { WorkerMessage, WorkerResponse } from './types'
+import { FirehoseSubscriptionOptions, WorkerResponse } from './types'
 
 interface Message {
   id: string | null
@@ -31,7 +31,7 @@ interface Message {
   data: Buffer | null
 }
 
-if (!parentPort) {
+if (!workerData) {
   throw new Error('Must be run as a worker')
 }
 
@@ -42,34 +42,11 @@ let idResolver: IdResolver
 
 const queue = new PQueue({ concurrency: 50 })
 
-parentPort.on('message', async (msg: WorkerMessage) => {
-  try {
-    if (msg.type === 'init') {
-      const db = new Database(msg.dbOptions)
-      // :/
-      if (typeof msg.redisOptions === 'string') {
-        redis = new Redis(msg.redisOptions)
-      } else {
-        redis = new Redis(msg.redisOptions)
-      }
-      idResolver = new IdResolver({
-        ...msg.idResolverOptions,
-        didCache: new MemoryCache(),
-      })
-      background = new BackgroundQueue(db)
-      indexingSvc = new IndexingService(db, idResolver, background)
-    }
-  } catch (err) {
-    parentPort?.postMessage({
-      type: 'error',
-      error: new FirehoseWorkerError(err),
-    } satisfies WorkerResponse)
-  }
-})
-
 void main()
 
 async function main() {
+  init()
+
   let cursor: string | null = null
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -77,6 +54,28 @@ async function main() {
     await queueMessage(message)
     cursor = nextCursor
   }
+}
+
+function init() {
+  const { dbOptions, redisOptions, idResolverOptions } =
+    workerData as FirehoseSubscriptionOptions
+  if (!dbOptions || !redisOptions || !idResolverOptions) {
+    throw new Error('worker missing options')
+  }
+
+  const db = new Database(dbOptions)
+  // :/
+  if (typeof redisOptions === 'string') {
+    redis = new Redis(redisOptions)
+  } else {
+    redis = new Redis(redisOptions)
+  }
+  idResolver = new IdResolver({
+    ...idResolverOptions,
+    didCache: new MemoryCache(),
+  })
+  background = new BackgroundQueue(db)
+  indexingSvc = new IndexingService(db, idResolver, background)
 }
 
 async function readNextMessage(cursor: string | null = null): Promise<
@@ -134,9 +133,10 @@ async function readNextMessage(cursor: string | null = null): Promise<
 
     const [id, msg] = res
     ret.id = id
-    ret.seq = isNaN(msg[1]) ? null : parseInt(msg[1])
+    ret.seq = parseIntWithFallback(msg[1], null)
     ret.data = msg[3]?.length ? Buffer.from(msg[3], 'base64') : null
-  } catch {
+  } catch (err) {
+    console.warn('error reading message', err)
     // will return ret as is */
   }
 
