@@ -1,5 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads'
-import { Redis } from 'ioredis'
+import { createClient } from '@redis/client'
 import PQueue from 'p-queue'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
@@ -35,7 +35,7 @@ if (!workerData) {
   throw new Error('Must be run as a worker')
 }
 
-let redis: Redis
+let redis: ReturnType<typeof createClient>
 let indexingSvc: IndexingService
 let background: BackgroundQueue
 let idResolver: IdResolver
@@ -64,12 +64,7 @@ function init() {
   }
 
   const db = new Database(dbOptions)
-  // :/
-  if (typeof redisOptions === 'string') {
-    redis = new Redis(redisOptions)
-  } else {
-    redis = new Redis(redisOptions)
-  }
+  redis = createClient(redisOptions)
   idResolver = new IdResolver({
     ...idResolverOptions,
     didCache: new MemoryCache(),
@@ -90,54 +85,47 @@ async function readNextMessage(cursor: string | null = null): Promise<
     cursor: null,
   }
 
+  let msg: { id: string; message: Record<string, string> } | null = null
+
   try {
     // First try to claim unclaimed messages
-    // [cursor, [[id, ['seq', seq, 'data', data]]]]
-    let res = await redis
-      .xautoclaim(
+    msg = await redis
+      .xAutoClaim(
         REDIS_STREAM_NAME,
         REDIS_GROUP_NAME,
         `${process.pid}`,
         60_000,
         cursor || '0-0',
-        'COUNT',
-        1,
+        { COUNT: 1 },
       )
-      .then((res: any[]) => {
-        ret.cursor = res?.[0] ?? null
-        return res?.[1]?.[0]
+      .then((res) => {
+        ret.cursor = res?.nextId ?? null
+        return res?.messages?.[0] ?? null
       })
 
-    if (!res?.length || !res[1]) {
+    if (!msg?.message?.seq) {
       // If there's nothing, read from the stream
-      // [[REDIS_STREAM_NAME, [[id, ['seq', seq, 'data', data]]]]]
-      res = await redis
-        .xreadgroup(
-          'GROUP',
+      msg = await redis
+        .xReadGroup(
           REDIS_GROUP_NAME,
           `${process.pid}`,
-          'COUNT',
-          1,
-          'BLOCK',
-          5000,
-          'STREAMS',
-          REDIS_STREAM_NAME,
-          '>',
+          { key: REDIS_STREAM_NAME, id: '>' },
+          {
+            COUNT: 1,
+            BLOCK: 5000,
+          },
         )
-        .then((res: any[]) => res?.[0]?.[1]?.[0])
-
-      if (!res?.length || !res[1]) {
-        throw 0
-      }
+        .then((res) => res?.[0]?.messages?.[0] ?? null)
     }
 
-    const [id, msg] = res
-    ret.id = id
-    ret.seq = parseIntWithFallback(msg[1], null)
-    ret.data = msg[3]?.length ? Buffer.from(msg[3], 'base64') : null
+    if (!msg?.message?.seq || !msg.message?.data?.length)
+      throw new Error('missing seq or data')
+
+    ret.id = msg.id
+    ret.seq = parseIntWithFallback(msg.message.seq, null)
+    ret.data = Buffer.from(msg.message.data, 'base64')
   } catch (err) {
     console.warn('error reading message', err)
-    // will return ret as is */
   }
 
   ret.cursor ||= '0-0'
@@ -159,11 +147,9 @@ async function queueMessage({ id, seq, data }: Message) {
         .then(() =>
           redis
             .multi()
-            .xack(REDIS_STREAM_NAME, REDIS_GROUP_NAME, id)
-            .xdel(REDIS_STREAM_NAME, id)
-            .exec((err) => {
-              if (err) throw err
-            }),
+            .xAck(REDIS_STREAM_NAME, REDIS_GROUP_NAME, id)
+            .xDel(REDIS_STREAM_NAME, id)
+            .exec(),
         )
         .catch((err) =>
           parentPort?.postMessage({
