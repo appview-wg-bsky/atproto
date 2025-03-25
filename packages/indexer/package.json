@@ -27,7 +27,7 @@
     "@atproto/repo": "workspace:^",
     "@atproto/sync": "workspace:^",
     "@atproto/xrpc-server": "workspace:^",
-    "ioredis": "^5.3.2",
+    "@redis/client": "^1.6.0",
     "multiformats": "^9.9.0",
     "p-queue": "^6.6.2"
   },

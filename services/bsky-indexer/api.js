@@ -25,7 +25,7 @@ const main = async () => {
     service: env.repoProvider,
     dbOptions,
     idResolverOptions,
-    redisOptions: env.redisUrl,
+    redisOptions: { url: env.redisUrl },
     minWorkers: 4,
     maxWorkers: 12,
     onError: (err) =>
