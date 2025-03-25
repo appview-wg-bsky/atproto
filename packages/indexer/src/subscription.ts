@@ -33,6 +33,9 @@ export class FirehoseSubscription {
       this.settings.scaleCheckIntervalMs = this.opts.scaleCheckIntervalMs
 
     this.redis = createClient(this.opts.redisOptions)
+    this.redis.on('error', (err) => {
+      this.opts.onError?.(err)
+    })
 
     for (let i = 0; i < this.settings.minWorkers; i++) {
       this.setupWorker()
@@ -116,6 +119,8 @@ export class FirehoseSubscription {
   }
 
   async start() {
+    await this.redis.connect()
+
     try {
       await this.redis.xGroupCreate(REDIS_STREAM_NAME, REDIS_GROUP_NAME, '$', {
         MKSTREAM: true,

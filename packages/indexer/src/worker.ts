@@ -56,15 +56,17 @@ async function main() {
   }
 }
 
-function init() {
+async function init() {
   const { dbOptions, redisOptions, idResolverOptions } =
     workerData as FirehoseSubscriptionOptions
   if (!dbOptions || !redisOptions || !idResolverOptions) {
     throw new Error('worker missing options')
   }
 
-  const db = new Database(dbOptions)
   redis = createClient(redisOptions)
+  await redis.connect()
+
+  const db = new Database(dbOptions)
   idResolver = new IdResolver({
     ...idResolverOptions,
     didCache: new MemoryCache(),
