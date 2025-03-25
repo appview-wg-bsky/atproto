@@ -175,9 +175,9 @@ export class FirehoseSubscription {
   async handleMessage(chunk: Uint8Array) {
     const decoded = cborDecodeMulti(chunk)
     const seq = (decoded?.[1] as any)?.seq
-    if (seq !== undefined) {
+    if (seq) {
       await this.redis.xAdd(REDIS_STREAM_NAME, '*', {
-        seq,
+        seq: `${seq}`,
         data: Buffer.from(chunk).toString('base64'),
       })
     }
