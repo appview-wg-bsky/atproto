@@ -156,7 +156,15 @@ async function queueMessage({ id, seq, data }: Message) {
   void queue.add(
     () =>
       handleMessage(data)
-        .then(() => redis.xack(REDIS_STREAM_NAME, REDIS_GROUP_NAME, id))
+        .then(() =>
+          redis
+            .multi()
+            .xack(REDIS_STREAM_NAME, REDIS_GROUP_NAME, id)
+            .xdel(REDIS_STREAM_NAME, id)
+            .exec((err) => {
+              if (err) throw err
+            }),
+        )
         .catch((err) =>
           parentPort?.postMessage({
             type: 'error',
