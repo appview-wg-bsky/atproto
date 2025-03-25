@@ -1,7 +1,7 @@
 import { cpus } from 'node:os'
 import * as path from 'node:path'
 import { Worker } from 'node:worker_threads'
-import { Redis } from 'ioredis'
+import { createClient } from '@redis/client'
 import { cborDecodeMulti } from '@atproto/common'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
@@ -12,7 +12,7 @@ export const REDIS_STREAM_NAME = 'bsky_indexer:firehose'
 export const REDIS_GROUP_NAME = 'bsky_indexer_consumers'
 
 export class FirehoseSubscription {
-  private redis: Redis
+  private redis: ReturnType<typeof createClient>
   private workers: Worker[] = []
   private ws: WebSocketKeepAlive | null = null
   private destroyed = false
@@ -32,12 +32,7 @@ export class FirehoseSubscription {
     if (this.opts.scaleCheckIntervalMs)
       this.settings.scaleCheckIntervalMs = this.opts.scaleCheckIntervalMs
 
-    // :/
-    if (typeof this.opts.redisOptions === 'string') {
-      this.redis = new Redis(this.opts.redisOptions)
-    } else {
-      this.redis = new Redis(this.opts.redisOptions)
-    }
+    this.redis = createClient(this.opts.redisOptions)
 
     for (let i = 0; i < this.settings.minWorkers; i++) {
       this.setupWorker()
@@ -77,7 +72,7 @@ export class FirehoseSubscription {
   private async checkScaling() {
     if (this.workers.length === 0) return
 
-    const [pending] = await this.redis.xpending(
+    const { pending } = await this.redis.xPending(
       REDIS_STREAM_NAME,
       REDIS_GROUP_NAME,
     )
@@ -122,20 +117,17 @@ export class FirehoseSubscription {
 
   async start() {
     try {
-      await this.redis.xgroup(
-        'CREATE',
-        REDIS_STREAM_NAME,
-        REDIS_GROUP_NAME,
-        '$',
-        'MKSTREAM',
-      )
+      await this.redis.xGroupCreate(REDIS_STREAM_NAME, REDIS_GROUP_NAME, '$', {
+        MKSTREAM: true,
+      })
     } catch {
       // will throw if the stream already exists
     }
 
-    const recoverFromId = await this.redis
-      .xrange(REDIS_STREAM_NAME, '-', '+', 'COUNT', 1)
-      .then((res) => res?.[0]?.[0])
+    const { id: recoverFromId } = await this.redis
+      .xRange(REDIS_STREAM_NAME, '-', '+', { COUNT: 1 })
+      .then((res) => res[0] ?? {})
+
     const initialCursor = recoverFromId?.includes('-')
       ? recoverFromId.split('-').shift()
       : null
@@ -179,17 +171,10 @@ export class FirehoseSubscription {
     const decoded = cborDecodeMulti(chunk)
     const seq = (decoded?.[1] as any)?.seq
     if (seq !== undefined) {
-      await this.redis.xadd(
-        REDIS_STREAM_NAME,
-        'MAXLEN',
-        '~',
-        20_000,
-        '*',
-        'seq',
+      await this.redis.xAdd(REDIS_STREAM_NAME, '*', {
         seq,
-        'data',
-        Buffer.from(chunk).toString('base64'),
-      )
+        data: Buffer.from(chunk).toString('base64'),
+      })
     }
   }
 
