@@ -45,7 +45,6 @@ let background: BackgroundQueue
 let idResolver: IdResolver
 
 const queue = new PQueue({ concurrency: 50 })
-
 void main()
 
 async function main() {
@@ -275,6 +274,7 @@ async function processEvent(evt: Event) {
 }
 
 async function waitUntilQueueLessThan(size: number) {
+  if (queue.size < size) return
   return new Promise<void>((resolve) => {
     const listener = () => {
       if (queue.size < size) {
