@@ -5,7 +5,11 @@ import { createClient } from '@redis/client'
 import { cborDecodeMulti } from '@atproto/common'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
-import { FirehoseSubscriptionOptions, WorkerResponse } from './types'
+import type {
+  FirehoseSubscriptionOptions,
+  WorkerData,
+  WorkerResponse,
+} from './types'
 
 const WORKER_PATH = path.join(__dirname, 'worker.js')
 export const REDIS_STREAM_NAME = 'bsky_indexer:firehose'
@@ -13,7 +17,7 @@ export const REDIS_GROUP_NAME = 'bsky_indexer_consumers'
 
 export class FirehoseSubscription {
   private redis: ReturnType<typeof createClient>
-  private workers: Worker[] = []
+  private workers: Map<number, { worker: Worker; data: WorkerData }> = new Map()
   private ws: WebSocketKeepAlive | null = null
   private destroyed = false
   private scaleCheckInterval: NodeJS.Timeout | null = null
@@ -42,8 +46,9 @@ export class FirehoseSubscription {
     }
   }
 
-  private setupWorker(workerId?: number) {
-    if (workerId !== undefined) void this.workers[workerId]?.terminate()
+  private setupWorker(replacingWorkerId?: number) {
+    if (replacingWorkerId !== undefined)
+      void this.workers.get(replacingWorkerId)?.worker?.terminate()
 
     const { dbOptions, redisOptions, idResolverOptions } = this.opts
     const worker = new Worker(WORKER_PATH, {
@@ -54,15 +59,30 @@ export class FirehoseSubscription {
       },
     })
 
-    if (workerId !== undefined) {
-      this.workers[workerId] = worker
-    } else {
-      workerId = this.workers.push(worker) - 1
-    }
+    this.workers.set(worker.threadId, {
+      worker,
+      data: { processedPerMinute: null, averageProcessingTime: null },
+    })
 
     worker.on('message', (msg: WorkerResponse) => {
       if (msg.type === 'processed') {
         void this.onProcessed(msg.id).catch((err) => this.opts.onError?.(err))
+
+        const data = this.workers.get(worker.threadId)?.data ?? {
+          processedPerMinute: null,
+          averageProcessingTime: null,
+        }
+
+        typeof data.processedPerMinute === 'number'
+          ? (data.processedPerMinute += 1)
+          : (data.processedPerMinute = 1)
+
+        typeof data.averageProcessingTime === 'number'
+          ? (data.averageProcessingTime =
+              (data.averageProcessingTime * data.processedPerMinute +
+                msg.time) /
+              (data.processedPerMinute + 1))
+          : (data.averageProcessingTime = msg.time)
       } else if (msg.type === 'error') {
         this.opts.onError?.(msg.error)
       }
@@ -70,12 +90,12 @@ export class FirehoseSubscription {
 
     worker.on('error', (err) => {
       this.opts.onError?.(new FirehoseWorkerError(err))
-      this.setupWorker(workerId)
+      this.setupWorker(replacingWorkerId)
     })
   }
 
   private async checkScaling() {
-    if (this.workers.length === 0) return
+    if (this.workers.size === 0) return
 
     const streamLength = await this.redis.xLen(REDIS_STREAM_NAME)
     if (typeof streamLength !== 'number' || isNaN(streamLength)) return
@@ -87,19 +107,19 @@ export class FirehoseSubscription {
 
     // Scale up if the pending count has increased for the last 3 cycles
     if (this.needsToScale >= 3) {
-      if (this.workers.length >= this.settings.maxWorkers) {
+      if (this.workers.size >= this.settings.maxWorkers) {
         console.warn(`pending count ${streamLength} but max workers reached`)
         return
       }
 
       const newWorkersCount = Math.min(
         this.settings.maxWorkers,
-        this.workers.length + Math.ceil(this.workers.length * 0.5), // Add 50% more workers
+        this.workers.size + Math.ceil(this.workers.size * 0.5), // Add 50% more workers
       )
       console.log(
-        `spawning ${newWorkersCount - this.workers.length} workers for a total of ${newWorkersCount}`,
+        `spawning ${newWorkersCount - this.workers.size} workers for a total of ${newWorkersCount}`,
       )
-      while (this.workers.length < newWorkersCount) {
+      while (this.workers.size < newWorkersCount) {
         this.setupWorker()
       }
       return
@@ -107,13 +127,15 @@ export class FirehoseSubscription {
     // Scale down if we're well ahead
     else if (
       streamLength < 500 &&
-      this.workers.length > this.settings.minWorkers
+      this.workers.size > this.settings.minWorkers
     ) {
-      const targetWorkers = this.workers.length - 1
+      const targetWorkers = this.workers.size - 1
       if (targetWorkers < this.settings.minWorkers) return
 
       console.log(`killing 1 worker for a total of ${targetWorkers}`)
-      const toTerminate = this.workers.pop()
+      const toTerminate = [...this.workers.values()].sort(
+        (a, b) => b.worker.threadId - a.worker.threadId,
+      )[0]?.worker
       if (!toTerminate) return
       await toTerminate.terminate()
       console.log(`killed worker ${toTerminate.threadId}`)
@@ -159,6 +181,8 @@ export class FirehoseSubscription {
         )
       }, 30_000)
 
+      setInterval(() => this.logWorkerStats(), 60_000)
+
       for await (const chunk of this.ws) {
         if (this.destroyed) break
         void this.handleMessage(chunk).catch((err) => {
@@ -189,6 +213,20 @@ export class FirehoseSubscription {
     await this.redis.xDel(REDIS_STREAM_NAME, id)
   }
 
+  logWorkerStats() {
+    const workers = [...this.workers.values()].sort(
+      (a, b) => b.worker.threadId - a.worker.threadId,
+    )
+    for (const { worker, data } of workers) {
+      console.log(
+        `${worker.threadId}: proc ${(data.processedPerMinute ?? 0) / 60}/sec, avg: ${data.averageProcessingTime}ms`,
+      )
+
+      data.processedPerMinute = null
+      data.averageProcessingTime = null
+    }
+  }
+
   async destroy() {
     this.destroyed = true
     if (this.scaleCheckInterval) {
@@ -196,6 +234,8 @@ export class FirehoseSubscription {
     }
     this.ws?.ws?.close()
 
-    await Promise.all(this.workers.map((worker) => worker.terminate()))
+    await Promise.all(
+      [...this.workers.values()].map(({ worker }) => worker.terminate()),
+    )
   }
 }
