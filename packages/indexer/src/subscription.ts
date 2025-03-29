@@ -1,15 +1,16 @@
 import { cpus } from 'node:os'
 import * as path from 'node:path'
-import { Worker } from 'node:worker_threads'
+import { SHARE_ENV, Worker } from 'node:worker_threads'
 import { createClient } from '@redis/client'
 import { cborDecodeMulti } from '@atproto/common'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
-import type {
+import {
   FirehoseSubscriptionOptions,
   WorkerData,
   WorkerResponse,
-} from './types'
+  logVerbose,
+} from './util'
 
 const WORKER_PATH = path.join(__dirname, 'worker.js')
 export const REDIS_STREAM_NAME = 'bsky_indexer:firehose'
@@ -57,6 +58,7 @@ export class FirehoseSubscription {
         redisOptions,
         idResolverOptions,
       },
+      env: SHARE_ENV,
     })
 
     this.workers.set(worker.threadId, {
@@ -66,6 +68,8 @@ export class FirehoseSubscription {
 
     worker.on('message', (msg: WorkerResponse) => {
       if (msg.type === 'processed') {
+        logVerbose(`received from worker [${worker.threadId}]: ${msg.id}`)
+
         void this.onProcessed(msg.id).catch((err) => this.opts.onError?.(err))
 
         const data = this.workers.get(worker.threadId)?.data ?? {
@@ -83,6 +87,11 @@ export class FirehoseSubscription {
                 msg.time) /
               (data.processedPerMinute + 1))
           : (data.averageProcessingTime = msg.time)
+
+        this.workers.set(worker.threadId, {
+          worker,
+          data,
+        })
       } else if (msg.type === 'error') {
         this.opts.onError?.(msg.error)
       }
