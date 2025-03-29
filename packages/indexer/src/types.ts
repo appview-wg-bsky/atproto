@@ -14,10 +14,16 @@ export interface FirehoseSubscriptionOptions {
   scaleCheckIntervalMs?: number
 }
 
+export interface WorkerData {
+  processedPerMinute: number | null
+  averageProcessingTime: number | null
+}
+
 export type WorkerResponse =
   | {
       type: 'processed'
       id: string
+      time: number
     }
   | {
       type: 'error'

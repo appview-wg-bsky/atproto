@@ -144,20 +144,23 @@ async function queueMessage({ id, seq, data }: Message) {
   await waitUntilQueueLessThan(1000)
 
   void queue.add(
-    () =>
-      handleMessage(data)
-        .then(() =>
-          parentPort?.postMessage({
-            type: 'processed',
-            id,
-          } satisfies WorkerResponse),
-        )
-        .catch((err) =>
-          parentPort?.postMessage({
-            type: 'error',
-            error: new FirehoseWorkerError(err),
-          } satisfies WorkerResponse),
-        ),
+    async () => {
+      const start = performance.now()
+      try {
+        await handleMessage(data)
+        const time = performance.now() - start
+        parentPort?.postMessage({
+          type: 'processed',
+          id,
+          time,
+        } satisfies WorkerResponse)
+      } catch (err) {
+        return parentPort?.postMessage({
+          type: 'error',
+          error: new FirehoseWorkerError(err),
+        } satisfies WorkerResponse)
+      }
+    },
     {
       // earlier messages are more important
       priority: Number.MAX_SAFE_INTEGER - seq,
