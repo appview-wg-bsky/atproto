@@ -61,7 +61,9 @@ export class FirehoseSubscription {
     }
 
     worker.on('message', (msg: WorkerResponse) => {
-      if (msg.type === 'error') {
+      if (msg.type === 'processed') {
+        void this.onProcessed(msg.id).catch((err) => this.opts.onError?.(err))
+      } else if (msg.type === 'error') {
         this.opts.onError?.(msg.error)
       }
     })
@@ -181,6 +183,10 @@ export class FirehoseSubscription {
         data: Buffer.from(chunk).toString('base64'),
       })
     }
+  }
+
+  async onProcessed(id: string) {
+    await this.redis.xDel(REDIS_STREAM_NAME, id)
   }
 
   async destroy() {

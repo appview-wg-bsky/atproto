@@ -14,7 +14,12 @@ export interface FirehoseSubscriptionOptions {
   scaleCheckIntervalMs?: number
 }
 
-export type WorkerResponse = {
-  type: 'error'
-  error: Error
-}
+export type WorkerResponse =
+  | {
+      type: 'processed'
+      id: string
+    }
+  | {
+      type: 'error'
+      error: Error
+    }
