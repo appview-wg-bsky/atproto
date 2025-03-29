@@ -30,8 +30,8 @@ export type WorkerResponse =
       error: Error
     }
 
-export const logVerbose = (...args: unknown[]): void => {
-  if (process.env.LOG_VERBOSE === 'true') {
-    console.log('VERBOSE:', ...args)
+export const logVerbose = (str: string, frequency = 1): void => {
+  if (process.env.LOG_VERBOSE === 'true' && Math.random() < frequency) {
+    console.log('VERBOSE:', str)
   }
 }
