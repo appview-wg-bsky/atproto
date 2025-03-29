@@ -109,6 +109,10 @@ export class FirehoseSubscription {
     const streamLength = await this.redis.xLen(REDIS_STREAM_NAME)
     if (typeof streamLength !== 'number' || isNaN(streamLength)) return
 
+    logVerbose(
+      `pending: ${streamLength} | previously: ${this.totalPending} | scaling: ${this.needsToScale}`,
+    )
+
     if (streamLength > this.totalPending) {
       this.needsToScale++
     } else this.needsToScale = Math.max(0, this.needsToScale - 1)
