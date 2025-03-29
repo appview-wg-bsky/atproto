@@ -218,7 +218,7 @@ export class FirehoseSubscription {
         )
       }, 30_000)
 
-      setInterval(() => this.logWorkerStats(), 60_000)
+      setInterval(() => this.logWorkerStats(), 30_000)
 
       for await (const chunk of this.ws) {
         if (this.destroyed) break
@@ -254,14 +254,20 @@ export class FirehoseSubscription {
     const workers = [...this.workers.values()].sort(
       (a, b) => b.worker.threadId - a.worker.threadId,
     )
-    for (const { worker, data } of workers) {
-      console.log(
-        `${worker.threadId}: proc ${(data.processedPerMinute ?? 0) / 60}/sec, avg: ${data.averageProcessingTime}ms`,
-      )
 
-      data.processedPerMinute = null
-      data.averageProcessingTime = null
-    }
+    console.log(
+      workers
+        .map(({ worker, data }) => {
+          const processed = ((data.processedPerMinute ?? 0) / 60).toFixed(2)
+          const avg = data.averageProcessingTime?.toFixed(2) ?? '?'
+
+          data.processedPerMinute = null
+          data.averageProcessingTime = null
+
+          return `\t[${worker.threadId}] processed: ${processed}/sec | avg: ${avg}ms`
+        })
+        .join('\n'),
+    )
   }
 
   async destroy() {
