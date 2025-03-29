@@ -29,3 +29,9 @@ export type WorkerResponse =
       type: 'error'
       error: Error
     }
+
+export const logVerbose = (...args: unknown[]): void => {
+  if (process.env.LOG_VERBOSE === 'true') {
+    console.log('VERBOSE:', ...args)
+  }
+}
