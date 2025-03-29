@@ -47,10 +47,7 @@ export class FirehoseSubscription {
     }
   }
 
-  private setupWorker(replacingWorkerId?: number) {
-    if (replacingWorkerId !== undefined)
-      void this.workers.get(replacingWorkerId)?.worker?.terminate()
-
+  private setupWorker() {
     const { dbOptions, redisOptions, idResolverOptions } = this.opts
     const worker = new Worker(WORKER_PATH, {
       workerData: {
@@ -102,7 +99,8 @@ export class FirehoseSubscription {
 
     worker.on('error', (err) => {
       this.opts.onError?.(new FirehoseWorkerError(err))
-      this.setupWorker(replacingWorkerId)
+      this.workers.delete(worker.threadId)
+      worker.terminate().then(() => this.setupWorker())
     })
   }
 
@@ -128,14 +126,15 @@ export class FirehoseSubscription {
         return
       }
 
-      const newWorkersCount = Math.min(
-        this.settings.maxWorkers,
-        this.workers.size + Math.ceil(this.workers.size * 0.5), // Add 50% more workers
-      )
+      const newWorkersCount =
+        Math.min(
+          this.settings.maxWorkers,
+          this.workers.size + Math.ceil(this.workers.size * 0.5), // Add 50% more workers
+        ) - this.workers.size
       console.log(
-        `spawning ${newWorkersCount - this.workers.size} workers for a total of ${newWorkersCount}`,
+        `spawning ${newWorkersCount} workers for a total of ${newWorkersCount + this.workers.size}`,
       )
-      while (this.workers.size < newWorkersCount) {
+      for (let i = 0; i < newWorkersCount; i++) {
         this.setupWorker()
       }
       return
@@ -156,6 +155,7 @@ export class FirehoseSubscription {
       if (!toTerminate) return
 
       await toTerminate.terminate()
+      this.workers.delete(toTerminate.threadId)
       console.log(`killed worker ${toTerminate.threadId}`)
 
       return
