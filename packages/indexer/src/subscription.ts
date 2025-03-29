@@ -67,7 +67,10 @@ export class FirehoseSubscription {
       const data = this.workers.get(worker.threadId)?.data ?? {}
 
       if (msg.type === 'processed') {
-        logVerbose(`received from worker [${worker.threadId}]: ${msg.id}`, 0.01)
+        logVerbose(
+          `received from worker [${worker.threadId}]: ${msg.id}`,
+          0.0005,
+        )
 
         void this.onProcessed(msg.id).catch((err) => this.opts.onError?.(err))
 
