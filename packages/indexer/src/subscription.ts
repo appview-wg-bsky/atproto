@@ -174,6 +174,12 @@ export class FirehoseSubscription {
       ? recoverFromId.split('-').shift()
       : null
 
+    if (initialCursor)
+      console.log(`starting from initial cursor: ${initialCursor}`)
+    else if (this.opts.cursor)
+      console.log(`starting from cursor: ${this.opts.cursor}`)
+    else console.log(`starting from latest`)
+
     try {
       this.ws = new WebSocketKeepAlive({
         getUrl: async () => {
