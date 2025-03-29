@@ -278,10 +278,14 @@ async function processEvent(evt: Event) {
 
 async function waitUntilQueueLessThan(size: number) {
   if (queue.size < size) return
+
+  parentPort?.postMessage({ type: 'maxed', maxed: true })
+
   return new Promise<void>((resolve) => {
     const listener = () => {
       if (queue.size < size) {
         queue.off('next', listener)
+        parentPort?.postMessage({ type: 'maxed', maxed: false })
         resolve()
       }
     }

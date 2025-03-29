@@ -63,19 +63,16 @@ export class FirehoseSubscription {
 
     this.workers.set(worker.threadId, {
       worker,
-      data: { processedPerMinute: null, averageProcessingTime: null },
+      data: {},
     })
 
     worker.on('message', (msg: WorkerResponse) => {
+      const data = this.workers.get(worker.threadId)?.data ?? {}
+
       if (msg.type === 'processed') {
         logVerbose(`received from worker [${worker.threadId}]: ${msg.id}`, 0.01)
 
         void this.onProcessed(msg.id).catch((err) => this.opts.onError?.(err))
-
-        const data = this.workers.get(worker.threadId)?.data ?? {
-          processedPerMinute: null,
-          averageProcessingTime: null,
-        }
 
         typeof data.processedPerMinute === 'number'
           ? (data.processedPerMinute += 1)
@@ -88,6 +85,12 @@ export class FirehoseSubscription {
               (data.processedPerMinute + 1))
           : (data.averageProcessingTime = msg.time)
 
+        this.workers.set(worker.threadId, {
+          worker,
+          data,
+        })
+      } else if (msg.type === 'maxed') {
+        data.maxed = msg.maxed
         this.workers.set(worker.threadId, {
           worker,
           data,
@@ -149,9 +152,23 @@ export class FirehoseSubscription {
       const toTerminate = [...this.workers.values()].sort(
         (a, b) => b.worker.threadId - a.worker.threadId,
       )[0]?.worker
+
       if (!toTerminate) return
+
       await toTerminate.terminate()
       console.log(`killed worker ${toTerminate.threadId}`)
+
+      return
+    }
+
+    // If more than half of workers are maxed out, add one
+    if (
+      [...this.workers.values()].filter(({ data }) => data.maxed).length >=
+      this.workers.size / 2
+    ) {
+      console.log(`spawning 1 worker for a total of ${this.workers.size + 1}`)
+      this.setupWorker()
+      return
     }
   }
 

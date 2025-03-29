@@ -15,8 +15,9 @@ export interface FirehoseSubscriptionOptions {
 }
 
 export interface WorkerData {
-  processedPerMinute: number | null
-  averageProcessingTime: number | null
+  processedPerMinute?: number | null
+  averageProcessingTime?: number | null
+  maxed?: boolean
 }
 
 export type WorkerResponse =
@@ -29,6 +30,7 @@ export type WorkerResponse =
       type: 'error'
       error: Error
     }
+  | { type: 'maxed'; maxed: boolean }
 
 export const logVerbose = (str: string, frequency = 1): void => {
   if (process.env.LOG_VERBOSE === 'true' && Math.random() < frequency) {
