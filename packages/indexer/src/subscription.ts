@@ -75,21 +75,18 @@ export class FirehoseSubscription {
   private async checkScaling() {
     if (this.workers.length === 0) return
 
-    const { pending } = await this.redis.xPending(
-      REDIS_STREAM_NAME,
-      REDIS_GROUP_NAME,
-    )
-    if (typeof pending !== 'number' || isNaN(pending)) return
+    const streamLength = await this.redis.xLen(REDIS_STREAM_NAME)
+    if (typeof streamLength !== 'number' || isNaN(streamLength)) return
 
-    if (pending > this.totalPending) {
+    if (streamLength > this.totalPending) {
       this.needsToScale++
     } else this.needsToScale = Math.max(0, this.needsToScale - 1)
-    this.totalPending = pending
+    this.totalPending = streamLength
 
     // Scale up if the pending count has increased for the last 3 cycles
     if (this.needsToScale >= 3) {
       if (this.workers.length >= this.settings.maxWorkers) {
-        console.warn(`pending count ${pending} but max workers reached`)
+        console.warn(`pending count ${streamLength} but max workers reached`)
         return
       }
 
@@ -106,7 +103,10 @@ export class FirehoseSubscription {
       return
     }
     // Scale down if we're well ahead
-    else if (pending < 500 && this.workers.length > this.settings.minWorkers) {
+    else if (
+      streamLength < 500 &&
+      this.workers.length > this.settings.minWorkers
+    ) {
       const targetWorkers = this.workers.length - 1
       if (targetWorkers < this.settings.minWorkers) return
 
