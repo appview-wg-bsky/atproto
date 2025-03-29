@@ -183,13 +183,11 @@ export class FirehoseSubscription {
       // will throw if the stream already exists
     }
 
-    const { id: recoverFromId } = await this.redis
+    const { message } = await this.redis
       .xRange(REDIS_STREAM_NAME, '-', '+', { COUNT: 1 })
       .then((res) => res[0] ?? {})
 
-    const initialCursor = recoverFromId?.includes('-')
-      ? recoverFromId.split('-').shift()
-      : null
+    const initialCursor = message?.seq || null
 
     if (initialCursor)
       console.log(`starting from initial cursor: ${initialCursor}`)
