@@ -57,7 +57,7 @@ async function main() {
 
     logVerbose(
       `[${threadId}] queuing ${message.seq}, total: ${queue.size}`,
-      0.01,
+      0.0005,
     )
     await queueMessage(message)
     cursor = nextCursor
@@ -175,7 +175,7 @@ async function queueMessage({ id, seq, data }: Message) {
     },
   )
 
-  logVerbose(`[${threadId}] queued ${seq}, total: ${queue.size}`, 0.01)
+  logVerbose(`[${threadId}] queued ${seq}, total: ${queue.size}`, 0.0005)
 }
 
 async function handleMessage(msg: Buffer) {
