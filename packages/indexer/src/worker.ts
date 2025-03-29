@@ -147,11 +147,10 @@ async function queueMessage({ id, seq, data }: Message) {
     () =>
       handleMessage(data)
         .then(() =>
-          redis
-            .multi()
-            .xAck(REDIS_STREAM_NAME, REDIS_GROUP_NAME, id)
-            .xDel(REDIS_STREAM_NAME, id)
-            .exec(),
+          parentPort?.postMessage({
+            type: 'processed',
+            id,
+          } satisfies WorkerResponse),
         )
         .catch((err) =>
           parentPort?.postMessage({
