@@ -26,8 +26,8 @@ const main = async () => {
     dbOptions,
     idResolverOptions,
     redisOptions: { url: env.redisUrl },
-    minWorkers: 4,
-    maxWorkers: 12,
+    minWorkers: env.minWorkers ?? 4,
+    maxWorkers: env.maxWorkers ?? 12,
     onError: (err) =>
       console.error(...(err.cause ? [err.message, err.cause] : [err])),
   })
@@ -47,6 +47,12 @@ const getEnv = () => ({
   redisUrl: process.env.REDIS_URL || undefined,
   poolSize: process.env.BSKY_DB_POOL_SIZE
     ? parseInt(process.env.BSKY_DB_POOL_SIZE)
+    : undefined,
+  minWorkers: process.env.SUB_MIN_WORKERS
+    ? parseInt(process.env.SUB_MIN_WORKERS)
+    : undefined,
+  maxWorkers: process.env.SUB_MAX_WORKERS
+    ? parseInt(process.env.SUB_MAX_WORKERS)
     : undefined,
 })
 
