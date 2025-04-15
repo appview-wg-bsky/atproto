@@ -327,37 +327,6 @@ importers:
         specifier: ^5.6.3
         version: 5.8.2
 
-  packages/bsky-indexer:
-    dependencies:
-      '@atproto/bsky':
-        specifier: workspace:^
-        version: link:../bsky
-      '@atproto/common':
-        specifier: workspace:^
-        version: link:../common
-      '@atproto/identity':
-        specifier: workspace:^
-        version: link:../identity
-      '@atproto/lexicon':
-        specifier: workspace:^
-        version: link:../lexicon
-      '@atproto/repo':
-        specifier: workspace:^
-        version: link:../repo
-      '@atproto/sync':
-        specifier: workspace:^
-        version: link:../sync
-      '@atproto/xrpc-server':
-        specifier: workspace:^
-        version: link:../xrpc-server
-      multiformats:
-        specifier: ^9.9.0
-        version: 9.9.0
-    devDependencies:
-      typescript:
-        specifier: ^5.6.3
-        version: 5.6.3
-
   packages/bsync:
     dependencies:
       '@atproto/common':
@@ -577,34 +546,6 @@ importers:
         specifier: ^5.6.3
         version: 5.8.2
 
-  packages/firehose-subscription:
-    dependencies:
-      '@atproto/bsky':
-        specifier: workspace:^
-        version: link:../bsky
-      '@atproto/identity':
-        specifier: workspace:^
-        version: link:../identity
-      '@atproto/lexicon':
-        specifier: workspace:^
-        version: link:../lexicon
-      '@atproto/repo':
-        specifier: workspace:^
-        version: link:../repo
-      '@atproto/sync':
-        specifier: workspace:^
-        version: link:../sync
-      '@atproto/xrpc-server':
-        specifier: workspace:^
-        version: link:../xrpc-server
-      multiformats:
-        specifier: ^9.9.0
-        version: 9.9.0
-    devDependencies:
-      typescript:
-        specifier: ^5.6.3
-        version: 5.6.3
-
   packages/identity:
     dependencies:
       '@atproto/common-web':
@@ -636,7 +577,7 @@ importers:
         specifier: ^5.6.3
         version: 5.8.2
 
-  packages/ingester:
+  packages/indexer:
     dependencies:
       '@atproto/bsky':
         specifier: workspace:^
@@ -659,13 +600,19 @@ importers:
       '@atproto/xrpc-server':
         specifier: workspace:^
         version: link:../xrpc-server
+      '@redis/client':
+        specifier: ^1.6.0
+        version: 1.6.0
       multiformats:
         specifier: ^9.9.0
         version: 9.9.0
+      p-queue:
+        specifier: ^6.6.2
+        version: 6.6.2
     devDependencies:
       typescript:
         specifier: ^5.6.3
-        version: 5.6.3
+        version: 5.8.2
 
   packages/internal/did-resolver:
     dependencies:
@@ -1870,33 +1817,15 @@ importers:
 
   services/bsky-indexer:
     dependencies:
-<<<<<<< HEAD
       '@futuristick/bsky-indexer':
         specifier: workspace:^
-        version: link:../../packages/bsky-indexer
-=======
-      '@futuristick/firehose-subscription':
-        specifier: workspace:^
-        version: link:../../packages/firehose-subscription
->>>>>>> 8ec38cd33 (Testing)
+        version: link:../../packages/indexer
 
   services/bsync:
     dependencies:
       '@atproto/bsync':
         specifier: workspace:^
         version: link:../../packages/bsync
-      dd-trace:
-        specifier: 3.13.2
-        version: 3.13.2
-
-  services/indexer:
-    dependencies:
-      '@atproto/bsky':
-        specifier: workspace:^
-        version: link:../../packages/bsky
-      '@atproto/crypto':
-        specifier: workspace:^
-        version: link:../../packages/crypto
       dd-trace:
         specifier: 3.13.2
         version: 3.13.2
@@ -7381,6 +7310,15 @@ packages:
     resolution: {integrity: sha512-A9+lCBZoaMJlVKcRBz2YByCG+Cp2t6nAnMnNba+XiWxnj6r4JUFqfsgwocMBZU9LPtdxC6wB56ySYpc7LQIoJg==}
     dev: true
 
+  /@redis/client@1.6.0:
+    resolution: {integrity: sha512-aR0uffYI700OEEH4gYnitAnv3vzVGXCFvYfdpu/CJKvk4pHfLPEy/JSZyrpQ+15WhXe1yJRXLtfQ84s4mEXnPg==}
+    engines: {node: '>=14'}
+    dependencies:
+      cluster-key-slot: 1.1.2
+      generic-pool: 3.9.0
+      yallist: 4.0.0
+    dev: false
+
   /@remix-run/node@2.16.4(typescript@5.8.2):
     resolution: {integrity: sha512-scZwpc78cJS8dx6LMLemVHqnaAVbPWasx36TxYWUASA63hxPx5XbGbb6pe4cSpT8dWqhBtsPpHZoFTrM1aqx7A==}
     engines: {node: '>=18.0.0'}
@@ -12013,6 +11951,11 @@ packages:
     dependencies:
       loader-utils: 3.2.1
     dev: true
+
+  /generic-pool@3.9.0:
+    resolution: {integrity: sha512-hymDOu5B53XvN4QT9dBmZxPX4CWhBPPLguTZ9MMFeFa/Kg0xWVfylOVNlJji/E7yTZWFd/q9GO5TxDLq156D7g==}
+    engines: {node: '>= 4'}
+    dev: false
 
   /gensync@1.0.0-beta.2:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
