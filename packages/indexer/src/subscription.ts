@@ -67,10 +67,10 @@ export class FirehoseSubscription {
       const data = this.workers.get(worker.threadId)?.data ?? {}
 
       if (msg.type === 'processed') {
-        logVerbose(
-          `received from worker [${worker.threadId}]: ${msg.id}`,
-          0.0005,
-        )
+        // logVerbose(
+        //   `received from worker [${worker.threadId}]: ${msg.id}`,
+        //   0.0005,
+        // )
 
         void this.onProcessed(msg.id).catch((err) => this.opts.onError?.(err))
 
@@ -113,11 +113,12 @@ export class FirehoseSubscription {
     const streamLength = await this.redis.xLen(REDIS_STREAM_NAME)
     if (typeof streamLength !== 'number' || isNaN(streamLength)) return
 
-    logVerbose(
-      `pending: ${streamLength} | previously: ${this.totalPending} | scaling: ${this.needsToScale}`,
-    )
+    // logVerbose(
+    //   `pending: ${streamLength} | previously: ${this.totalPending} | scaling: ${this.needsToScale}`,
+    // )
 
-    if (streamLength > this.totalPending) {
+    // We need to scale soon if the backlog is growing or if it's just too big
+    if (streamLength > this.totalPending || streamLength > 75_000) {
       this.needsToScale++
     } else this.needsToScale = Math.max(0, this.needsToScale - 1)
     this.totalPending = streamLength
