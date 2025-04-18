@@ -5,12 +5,7 @@ import { createClient } from '@redis/client'
 import { cborDecodeMulti } from '@atproto/common'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
-import {
-  FirehoseSubscriptionOptions,
-  WorkerData,
-  WorkerResponse,
-  logVerbose,
-} from './util'
+import { FirehoseSubscriptionOptions, WorkerData, WorkerResponse } from './util'
 
 const WORKER_PATH = path.join(__dirname, 'worker.js')
 export const REDIS_STREAM_NAME = 'bsky_indexer:firehose'
