@@ -251,6 +251,11 @@ async function processEvent(evt: Event) {
     } else {
       return indexingSvc.updateActorStatus(evt.did, evt.active, evt.status)
     }
+  } else if (evt.event === 'sync') {
+    return Promise.all([
+      indexingSvc.setCommitLastSeen(evt.did, evt.cid, evt.rev),
+      indexingSvc.indexHandle(evt.did, evt.time),
+    ])
   } else {
     const indexFn =
       evt.event === 'delete'
