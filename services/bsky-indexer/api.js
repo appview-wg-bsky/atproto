@@ -12,8 +12,8 @@ const main = async () => {
   const dbOptions = {
     url: env.dbPostgresUrl,
     schema: env.dbPostgresSchema,
-    poolSize: env.poolSize ?? 500,
-    poolIdleTimeoutMs: 30_000,
+    poolSize: env.poolSize ?? 100,
+    poolIdleTimeoutMs: 10_000,
   }
 
   const idResolverOptions = {
