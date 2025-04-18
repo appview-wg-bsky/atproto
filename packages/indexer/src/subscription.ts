@@ -118,7 +118,10 @@ export class FirehoseSubscription {
     // )
 
     // We need to scale soon if the backlog is growing or if it's just too big
-    if (streamLength > this.totalPending || streamLength > 75_000) {
+    if (
+      (streamLength > this.totalPending && streamLength > 5_000) ||
+      streamLength > 75_000
+    ) {
       this.needsToScale++
     } else this.needsToScale = Math.max(0, this.needsToScale - 1)
     this.totalPending = streamLength
@@ -158,9 +161,10 @@ export class FirehoseSubscription {
 
       if (!toTerminate) return
 
+      const { threadId } = toTerminate
       await toTerminate.terminate()
-      this.workers.delete(toTerminate.threadId)
-      console.log(`killed worker ${toTerminate.threadId}`)
+      this.workers.delete(threadId)
+      console.log(`killed worker ${threadId}`)
 
       return
     }
@@ -258,16 +262,16 @@ export class FirehoseSubscription {
 
     console.log(
       workers
-        .map(({ worker, data }) => {
+        .map(({ data }) => {
           const processed = ((data.processedPerMinute ?? 0) / 60).toFixed(2)
           const avg = data.averageProcessingTime?.toFixed(2) ?? '?'
 
           data.processedPerMinute = null
           data.averageProcessingTime = null
 
-          return `\t[${worker.threadId}] processed: ${processed}/sec | avg: ${avg}ms`
+          return `${processed}/s; ${avg}ms/`
         })
-        .join('\n'),
+        .join(' | '),
     )
   }
 
