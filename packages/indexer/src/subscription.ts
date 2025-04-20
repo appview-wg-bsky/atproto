@@ -131,7 +131,7 @@ export class FirehoseSubscription {
       const newWorkersCount =
         Math.min(
           this.settings.maxWorkers,
-          this.workers.size + Math.ceil(this.workers.size * 0.5), // Add 50% more workers
+          this.workers.size + Math.ceil(this.workers.size * 0.33), // Add 33% more workers
         ) - this.workers.size
       console.log(
         `spawning ${newWorkersCount} workers for a total of ${newWorkersCount + this.workers.size}`,
@@ -139,6 +139,8 @@ export class FirehoseSubscription {
       for (let i = 0; i < newWorkersCount; i++) {
         this.setupWorker()
       }
+
+      this.needsToScale = 0
       return
     }
     // Scale down if we're well ahead

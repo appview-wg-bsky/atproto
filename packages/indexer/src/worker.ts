@@ -44,7 +44,7 @@ let indexingSvc: IndexingService
 let background: BackgroundQueue
 let idResolver: IdResolver
 
-const queue = new PQueue({ concurrency: 250 })
+const queue = new PQueue({ concurrency: 500 })
 void main()
 
 async function main() {
@@ -149,12 +149,17 @@ async function queueMessage({ id, seq, data }: Message) {
     return
   }
 
+  const start = performance.now()
   await waitUntilQueueLessThan(10_000)
+  const waited = performance.now() - start
+  if (waited > 1000) {
+    logVerbose(`[${threadId}] waited ${waited.toFixed(1)}ms`, 0.01)
+  }
 
   void queue.add(
     async () => {
-      const start = performance.now()
       try {
+        const start = performance.now()
         await handleMessage(data)
         const time = performance.now() - start
         parentPort?.postMessage({
@@ -169,10 +174,10 @@ async function queueMessage({ id, seq, data }: Message) {
         } satisfies WorkerResponse)
       }
     },
-    {
-      // earlier messages are more important
-      priority: Number.MAX_SAFE_INTEGER - seq,
-    },
+    // {
+    //   // earlier messages are more important
+    //   priority: Number.MAX_SAFE_INTEGER - seq,
+    // },
   )
 
   // logVerbose(`[${threadId}] queued ${seq}, total: ${queue.size}`, 0.0005)
@@ -215,8 +220,8 @@ async function handleMessage(msg: Buffer) {
   const processTime = performance.now() - start - parseTime
 
   logVerbose(
-    `[${threadId}] ${parsed[0].event} ${parseTime}ms / ${processTime}ms`,
-    0.001,
+    `[${threadId}] ${parsed[0]?.event || '?'} ${parseTime.toFixed(1)}ms / ${processTime.toFixed(1)}ms (${queue.size}}`,
+    0.002,
   )
 }
 
