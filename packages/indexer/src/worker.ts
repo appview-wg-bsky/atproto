@@ -40,11 +40,11 @@ let indexingSvc: IndexingService
 let background: BackgroundQueue
 let idResolver: IdResolver
 
-const queue = new PQueue({ concurrency: 50 })
+const queue = new PQueue({ concurrency: 100 })
 void main()
 
 async function main() {
-  init()
+  await init()
 
   let cursor: string | null = null
   // eslint-disable-next-line no-constant-condition
@@ -145,7 +145,7 @@ async function queueMessage({ id, seq, data }: Message) {
     return
   }
 
-  await waitUntilQueueLessThan(1000)
+  await waitUntilQueueLessThan(2000)
 
   void queue.add(
     async () => {
