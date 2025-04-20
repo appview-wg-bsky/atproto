@@ -3,7 +3,6 @@ import { createClient } from '@redis/client'
 import PQueue from 'p-queue'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
-import { parseIntWithFallback } from '@atproto/common'
 import { IdResolver, MemoryCache } from '@atproto/identity'
 import { WriteOpAction } from '@atproto/repo'
 import {
@@ -31,7 +30,6 @@ import {
 
 interface Message {
   id: string | null
-  seq: number | null
   data: Buffer | null
 }
 
@@ -90,7 +88,6 @@ async function readNextMessage(cursor: string | null = null): Promise<
 > {
   const ret: Message & { cursor: string | null } = {
     id: null,
-    seq: null,
     data: null,
     cursor: null,
   }
@@ -132,7 +129,6 @@ async function readNextMessage(cursor: string | null = null): Promise<
       throw new Error('missing seq or data')
 
     ret.id = msg.id
-    ret.seq = parseIntWithFallback(msg.message.seq, null)
     ret.data = Buffer.from(msg.message.data, 'base64')
   } catch (err) {
     console.warn('error reading message', err)
@@ -143,9 +139,9 @@ async function readNextMessage(cursor: string | null = null): Promise<
   return ret
 }
 
-async function queueMessage({ id, seq, data }: Message) {
-  if (!id || !seq || !data) {
-    console.warn('invalid message', id, seq, data)
+async function queueMessage({ id, data }: Message) {
+  if (!id || !data) {
+    console.warn('invalid message', id, data)
     return
   }
 
@@ -215,6 +211,12 @@ async function handleMessage(msg: Buffer) {
   const parsed = await parseEvt(event)
   const parseTime = performance.now() - start
   for (const evt of parsed) {
+    if (evt.seq % 1000 === 0) {
+      parentPort?.postMessage({
+        type: 'seq',
+        seq: `${evt.seq}`,
+      })
+    }
     await processEvent(evt)
   }
   const processTime = performance.now() - start - parseTime

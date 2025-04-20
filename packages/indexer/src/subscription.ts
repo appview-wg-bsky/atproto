@@ -2,7 +2,6 @@ import { cpus } from 'node:os'
 import * as path from 'node:path'
 import { SHARE_ENV, Worker } from 'node:worker_threads'
 import { createClient } from '@redis/client'
-import { cborDecodeMulti } from '@atproto/common'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
 import { FirehoseSubscriptionOptions, WorkerData, WorkerResponse } from './util'
@@ -10,6 +9,7 @@ import { FirehoseSubscriptionOptions, WorkerData, WorkerResponse } from './util'
 const WORKER_PATH = path.join(__dirname, 'worker.js')
 export const REDIS_STREAM_NAME = 'bsky_indexer:firehose'
 export const REDIS_GROUP_NAME = 'bsky_indexer_consumers'
+const REDIS_SEQ_KEY = 'bsky_indexer:seq'
 
 export class FirehoseSubscription {
   private redis: ReturnType<typeof createClient>
@@ -90,6 +90,13 @@ export class FirehoseSubscription {
           worker,
           data,
         })
+      } else if (msg.type === 'seq') {
+        const seq = msg.seq || null
+        if (seq) {
+          void this.redis.set(REDIS_SEQ_KEY, seq).catch((err) => {
+            this.opts.onError?.(err)
+          })
+        }
       } else if (msg.type === 'error') {
         this.opts.onError?.(msg.error)
       }
@@ -188,11 +195,7 @@ export class FirehoseSubscription {
       // will throw if the stream already exists
     }
 
-    const { message } = await this.redis
-      .xRange(REDIS_STREAM_NAME, '-', '+', { COUNT: 1 })
-      .then((res) => res[0] ?? {})
-
-    const initialCursor = message?.seq || null
+    const initialCursor = await this.redis.get(REDIS_SEQ_KEY)
 
     if (initialCursor)
       console.log(`starting from initial cursor: ${initialCursor}`)
@@ -238,14 +241,9 @@ export class FirehoseSubscription {
   }
 
   async handleMessage(chunk: Uint8Array) {
-    const decoded = cborDecodeMulti(chunk)
-    const seq = (decoded?.[1] as any)?.seq
-    if (seq) {
-      await this.redis.xAdd(REDIS_STREAM_NAME, '*', {
-        seq: `${seq}`,
-        data: Buffer.from(chunk).toString('base64'),
-      })
-    }
+    return this.redis.xAdd(REDIS_STREAM_NAME, '*', {
+      data: Buffer.from(chunk).toString('base64'),
+    })
   }
 
   async onProcessed(id: string) {

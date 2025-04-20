@@ -27,6 +27,10 @@ export type WorkerResponse =
       time: number
     }
   | {
+      type: 'seq'
+      seq: string
+    }
+  | {
       type: 'error'
       error: Error
     }
