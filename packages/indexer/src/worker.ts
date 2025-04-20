@@ -1,4 +1,4 @@
-import { parentPort, workerData } from 'node:worker_threads'
+import { parentPort, threadId, workerData } from 'node:worker_threads'
 import { createClient } from '@redis/client'
 import PQueue from 'p-queue'
 import { BackgroundQueue, Database } from '@atproto/bsky'
@@ -23,7 +23,11 @@ import {
   isValidRepoEvent,
 } from './lexicons'
 import { REDIS_GROUP_NAME, REDIS_STREAM_NAME } from './subscription'
-import { type FirehoseSubscriptionOptions, type WorkerResponse } from './util'
+import {
+  type FirehoseSubscriptionOptions,
+  type WorkerResponse,
+  logVerbose,
+} from './util'
 
 interface Message {
   id: string | null
@@ -178,7 +182,9 @@ async function handleMessage(msg: Buffer) {
   if (!indexingSvc) {
     throw new Error('Worker not initialized')
   }
-  ;``
+
+  const start = performance.now()
+
   const message = ensureChunkIsMessage(msg)
   const t = message.header.t
   const clone: Record<string, unknown> | undefined =
@@ -202,9 +208,16 @@ async function handleMessage(msg: Buffer) {
   }
 
   const parsed = await parseEvt(event)
+  const parseTime = performance.now() - start
   for (const evt of parsed) {
     await processEvent(evt)
   }
+  const processTime = performance.now() - start - parseTime
+
+  logVerbose(
+    `[${threadId}] ${parsed[0].event} ${parseTime}ms / ${processTime}ms`,
+    0.001,
+  )
 }
 
 async function parseEvt(evt: RepoEvent): Promise<Event[]> {
