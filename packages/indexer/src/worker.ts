@@ -40,7 +40,7 @@ let indexingSvc: IndexingService
 let background: BackgroundQueue
 let idResolver: IdResolver
 
-const queue = new PQueue({ concurrency: 100 })
+const queue = new PQueue({ concurrency: 250 })
 void main()
 
 async function main() {
@@ -145,7 +145,7 @@ async function queueMessage({ id, seq, data }: Message) {
     return
   }
 
-  await waitUntilQueueLessThan(2000)
+  await waitUntilQueueLessThan(10_000)
 
   void queue.add(
     async () => {
