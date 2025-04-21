@@ -109,13 +109,26 @@ export class FirehoseSubscription {
 
     worker.on('error', (err) => {
       this.opts.onError?.(new FirehoseWorkerError(err))
-      this.workers.delete(worker.threadId)
-      worker.terminate().then(() => this.setupWorker())
+      if (this.workers.delete(worker.threadId))
+        worker.terminate().then(() => this.setupWorker())
     })
   }
 
   private async checkScaling() {
     if (this.workers.size === 0) return
+
+    if (this.workers.size > this.settings.maxWorkers) {
+      Array.from(this.workers.values())
+        .sort((a, b) => b.worker.threadId - a.worker.threadId)
+        .slice(0, this.workers.size - this.settings.maxWorkers)
+        .forEach(
+          ({ worker }) =>
+            this.workers.delete(worker.threadId) && worker.terminate(),
+        )
+      console.log(
+        `killed ${this.workers.size - this.settings.maxWorkers} extra workers`,
+      )
+    }
 
     const streamLength = await this.redis.xLen(REDIS_STREAM_NAME)
     if (typeof streamLength !== 'number' || isNaN(streamLength)) {
