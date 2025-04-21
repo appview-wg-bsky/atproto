@@ -170,8 +170,6 @@ async function handleMessage(msg: Buffer) {
     throw new Error('Worker not initialized')
   }
 
-  const start = performance.now()
-
   const message = ensureChunkIsMessage(msg)
   const t = message.header.t
   const clone: Record<string, unknown> | undefined =
@@ -195,7 +193,6 @@ async function handleMessage(msg: Buffer) {
   }
 
   const parsed = await parseEvt(event)
-  const parseTime = performance.now() - start
   for (const evt of parsed) {
     if (evt.seq % 1000 === 0) {
       parentPort?.postMessage({
@@ -205,12 +202,11 @@ async function handleMessage(msg: Buffer) {
     }
     await processEvent(evt)
   }
-  const processTime = performance.now() - start - parseTime
 
-  logVerbose(
-    `[${threadId}] ${parsed[0]?.event || '?'} ${parseTime.toFixed(1)}ms / ${processTime.toFixed(1)}ms (${background.queue.size})`,
-    0.002,
-  )
+  // logVerbose(
+  //   `[${threadId}] ${parsed[0]?.event || '?'} ${parseTime.toFixed(1)}ms / ${processTime.toFixed(1)}ms (${background.queue.size})`,
+  //   0.002,
+  // )
 }
 
 async function parseEvt(evt: RepoEvent): Promise<Event[]> {

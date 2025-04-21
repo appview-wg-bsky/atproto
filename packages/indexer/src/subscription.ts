@@ -4,7 +4,12 @@ import { SHARE_ENV, Worker } from 'node:worker_threads'
 import { createClient } from '@redis/client'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
-import { FirehoseSubscriptionOptions, WorkerData, WorkerResponse } from './util'
+import {
+  FirehoseSubscriptionOptions,
+  WorkerData,
+  WorkerResponse,
+  logVerbose,
+} from './util'
 
 const WORKER_PATH = path.join(__dirname, 'worker.js')
 export const REDIS_STREAM_NAME = 'bsky_indexer:firehose'
@@ -113,23 +118,26 @@ export class FirehoseSubscription {
     if (this.workers.size === 0) return
 
     const streamLength = await this.redis.xLen(REDIS_STREAM_NAME)
-    if (typeof streamLength !== 'number' || isNaN(streamLength)) return
+    if (typeof streamLength !== 'number' || isNaN(streamLength)) {
+      console.warn(`invalid stream length: ${streamLength}`)
+      return
+    }
 
-    // logVerbose(
-    //   `pending: ${streamLength} | previously: ${this.totalPending} | scaling: ${this.needsToScale}`,
-    // )
+    logVerbose(
+      `pending: ${streamLength} | previously: ${this.totalPending} | scaling: ${this.needsToScale}`,
+    )
 
     // We need to scale soon if the backlog is growing or if it's just too big
     if (
       (streamLength > this.totalPending && streamLength > 5_000) ||
-      streamLength > 75_000
+      streamLength > 20_000
     ) {
-      this.needsToScale++
+      this.needsToScale += 2
     } else this.needsToScale = Math.max(0, this.needsToScale - 1)
     this.totalPending = streamLength
 
     // Scale up if the pending count has increased for the last 3 cycles
-    if (this.needsToScale >= 3) {
+    if (this.needsToScale >= 5) {
       if (this.workers.size >= this.settings.maxWorkers) {
         console.warn(`pending count ${streamLength} but max workers reached`)
         return
@@ -152,7 +160,7 @@ export class FirehoseSubscription {
     }
     // Scale down if we're well ahead
     else if (
-      streamLength < 500 &&
+      streamLength < 1000 &&
       this.workers.size > this.settings.minWorkers
     ) {
       const targetWorkers = this.workers.size - 1
