@@ -1,6 +1,5 @@
 import { parentPort, threadId, workerData } from 'node:worker_threads'
 import { createClient } from '@redis/client'
-import PQueue from 'p-queue'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
 import { IdResolver, MemoryCache } from '@atproto/identity'
@@ -42,7 +41,6 @@ let indexingSvc: IndexingService
 let background: BackgroundQueue
 let idResolver: IdResolver
 
-const queue = new PQueue({ concurrency: 500 })
 void main()
 
 async function main() {
@@ -148,7 +146,7 @@ async function queueMessage({ id, data }: Message) {
     logVerbose(`[${threadId}] waited ${waited.toFixed(1)}ms`, 0.01)
   }
 
-  void queue.add(async () => {
+  void background.add(async () => {
     try {
       const start = performance.now()
       await handleMessage(data)
@@ -210,7 +208,7 @@ async function handleMessage(msg: Buffer) {
   const processTime = performance.now() - start - parseTime
 
   logVerbose(
-    `[${threadId}] ${parsed[0]?.event || '?'} ${parseTime.toFixed(1)}ms / ${processTime.toFixed(1)}ms (${queue.size}}`,
+    `[${threadId}] ${parsed[0]?.event || '?'} ${parseTime.toFixed(1)}ms / ${processTime.toFixed(1)}ms (${background.queue.size})`,
     0.002,
   )
 }
@@ -286,18 +284,18 @@ async function processEvent(evt: Event) {
 }
 
 async function waitUntilQueueLessThan(size: number) {
-  if (queue.size < size) return
+  if (background.queue.size < size) return
 
   parentPort?.postMessage({ type: 'maxed', maxed: true })
 
   return new Promise<void>((resolve) => {
     const listener = () => {
-      if (queue.size < size) {
-        queue.off('next', listener)
+      if (background.queue.size < size) {
+        background.queue.off('next', listener)
         parentPort?.postMessage({ type: 'maxed', maxed: false })
         resolve()
       }
     }
-    queue.on('next', listener)
+    background.queue.on('next', listener)
   })
 }
