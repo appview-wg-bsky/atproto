@@ -53,10 +53,6 @@ async function main() {
   while (true) {
     const { cursor: nextCursor, ...message } = await readNextMessage(cursor)
 
-    // logVerbose(
-    //   `[${threadId}] queuing ${message.seq}, total: ${queue.size}`,
-    //   0.0005,
-    // )
     await queueMessage(message)
     cursor = nextCursor
   }
@@ -92,7 +88,7 @@ async function readNextMessage(cursor: string | null = null): Promise<
     cursor: null,
   }
 
-  let msg: { id: string; message: Record<string, string> } | null = null
+  let msg: { id: string; message: { data?: string } } | null = null
 
   try {
     // First try to claim unclaimed messages
@@ -110,7 +106,7 @@ async function readNextMessage(cursor: string | null = null): Promise<
         return res?.messages?.[0] ?? null
       })
 
-    if (!msg?.message?.seq) {
+    if (!msg?.message?.data?.length) {
       // If there's nothing, read from the stream
       msg = await redis
         .xReadGroup(
@@ -125,8 +121,8 @@ async function readNextMessage(cursor: string | null = null): Promise<
         .then((res) => res?.[0]?.messages?.[0] ?? null)
     }
 
-    if (!msg?.message?.seq || !msg.message?.data?.length)
-      throw new Error('missing seq or data')
+    if (!msg?.message?.data?.length)
+      throw new Error('missing data in ' + msg?.id || 'unknown message')
 
     ret.id = msg.id
     ret.data = Buffer.from(msg.message.data, 'base64')
@@ -152,31 +148,23 @@ async function queueMessage({ id, data }: Message) {
     logVerbose(`[${threadId}] waited ${waited.toFixed(1)}ms`, 0.01)
   }
 
-  void queue.add(
-    async () => {
-      try {
-        const start = performance.now()
-        await handleMessage(data)
-        const time = performance.now() - start
-        parentPort?.postMessage({
-          type: 'processed',
-          id,
-          time,
-        } satisfies WorkerResponse)
-      } catch (err) {
-        return parentPort?.postMessage({
-          type: 'error',
-          error: new FirehoseWorkerError(err),
-        } satisfies WorkerResponse)
-      }
-    },
-    // {
-    //   // earlier messages are more important
-    //   priority: Number.MAX_SAFE_INTEGER - seq,
-    // },
-  )
-
-  // logVerbose(`[${threadId}] queued ${seq}, total: ${queue.size}`, 0.0005)
+  void queue.add(async () => {
+    try {
+      const start = performance.now()
+      await handleMessage(data)
+      const time = performance.now() - start
+      parentPort?.postMessage({
+        type: 'processed',
+        id,
+        time,
+      } satisfies WorkerResponse)
+    } catch (err) {
+      return parentPort?.postMessage({
+        type: 'error',
+        error: new FirehoseWorkerError(err),
+      } satisfies WorkerResponse)
+    }
+  })
 }
 
 async function handleMessage(msg: Buffer) {
