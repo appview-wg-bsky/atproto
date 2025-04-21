@@ -27,7 +27,7 @@ const main = async () => {
     idResolverOptions,
     redisOptions: { url: env.redisUrl },
     minWorkers: env.minWorkers ?? 4,
-    maxWorkers: env.maxWorkers ?? 12,
+    maxWorkers: env.maxWorkers ?? 24,
     onError: (err) =>
       console.error(...(err.cause ? [err.message, err.cause] : [err])),
   })

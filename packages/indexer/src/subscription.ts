@@ -23,7 +23,7 @@ export class FirehoseSubscription {
   private settings = {
     scaleCheckIntervalMs: 5_000,
     minWorkers: 2,
-    maxWorkers: cpus().length,
+    maxWorkers: cpus().length * 2,
   }
 
   constructor(private opts: FirehoseSubscriptionOptions) {
