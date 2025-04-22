@@ -28,7 +28,7 @@ export class FirehoseSubscription {
   private settings = {
     scaleCheckIntervalMs: 5_000,
     minWorkers: 2,
-    maxWorkers: cpus().length * 2,
+    maxWorkers: cpus().length * 4,
   }
 
   constructor(private opts: FirehoseSubscriptionOptions) {
@@ -115,8 +115,6 @@ export class FirehoseSubscription {
   }
 
   private async checkScaling() {
-    if (this.workers.size === 0) return
-
     if (this.workers.size > this.settings.maxWorkers) {
       Array.from(this.workers.values())
         .sort((a, b) => b.worker.threadId - a.worker.threadId)
