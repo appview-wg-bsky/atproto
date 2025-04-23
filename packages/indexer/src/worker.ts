@@ -143,7 +143,7 @@ async function queueMessage({ id, data }: Message) {
   await waitUntilQueueLessThan(10_000)
   const waited = performance.now() - start
   if (waited > 1000) {
-    logVerbose(`[${threadId}] waited ${waited.toFixed(1)}ms`, 0.01)
+    logVerbose(`[${threadId}] waited ${waited.toFixed(1)}ms`)
   }
 
   void background.add(async () => {
@@ -151,6 +151,13 @@ async function queueMessage({ id, data }: Message) {
       const start = performance.now()
       await handleMessage(data)
       const time = performance.now() - start
+
+      if (time > 1000) {
+        logVerbose(
+          `[${threadId}] ${time.toFixed(1)}ms to process ${id} (${background.queue.size})`,
+        )
+      }
+
       parentPort?.postMessage({
         type: 'processed',
         id,
@@ -193,6 +200,8 @@ async function handleMessage(msg: Buffer) {
   }
 
   const parsed = await parseEvt(event)
+
+  const now = performance.now()
   for (const evt of parsed) {
     if (evt.seq % 1000 === 0) {
       parentPort?.postMessage({
@@ -202,11 +211,14 @@ async function handleMessage(msg: Buffer) {
     }
     await processEvent(evt)
   }
+  const elapsed = performance.now() - now
 
-  // logVerbose(
-  //   `[${threadId}] ${parsed[0]?.event || '?'} ${parseTime.toFixed(1)}ms / ${processTime.toFixed(1)}ms (${background.queue.size})`,
-  //   0.002,
-  // )
+  if (elapsed > 1000) {
+    logVerbose(
+      // @ts-expect-error
+      `[${threadId}] ${elapsed.toFixed(1)}ms to process ${parsed?.[0]?.event} ${parsed?.[0]?.collection}`,
+    )
+  }
 }
 
 async function parseEvt(evt: RepoEvent): Promise<Event[]> {

@@ -71,7 +71,6 @@ export class FirehoseSubscription {
         //   `received from worker [${worker.threadId}]: ${msg.id}`,
         //   0.0005,
         // )
-
         void this.onProcessed(msg.id).catch((err) => this.opts.onError?.(err))
 
         typeof data.processedPerMinute === 'number'
