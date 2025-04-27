@@ -3,7 +3,7 @@
 
 'use strict'
 
-const { FirehoseSubscription } = require('@futuristick/bsky-indexer')
+import { FirehoseSubscription } from '@futuristick/bsky-indexer'
 
 const main = async () => {
   const env = getEnv()

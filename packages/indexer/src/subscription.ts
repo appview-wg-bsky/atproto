@@ -1,13 +1,12 @@
 import { availableParallelism } from 'node:os'
-import * as path from 'node:path'
 import { SHARE_ENV } from 'node:worker_threads'
 import { createClient } from '@redis/client'
-import { Firehose } from '@skyware/firehose'
+import { type Event, Firehose } from '@skyware/firehose'
 import PQueue from 'p-queue'
-import Piscina, { FixedQueue } from 'piscina'
-import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
-import { FirehoseSubscriptionOptions, SubscribeReposMessage } from './util'
-import type { default as worker } from './worker'
+import { FixedQueue, Piscina } from 'piscina'
+import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors.js'
+import { FirehoseSubscriptionOptions } from './util.js'
+import type { default as worker } from './worker.js'
 
 declare module 'piscina' {
   interface PiscinaTask {
@@ -20,7 +19,7 @@ declare module 'piscina' {
 }
 
 const REDIS_SEQ_KEY = 'bsky_indexer:seq'
-const WORKER_PATH = path.join(__dirname, 'worker.js')
+const WORKER_PATH = new URL('./worker.js', import.meta.url).href
 const MAX_ATTEMPTS = 5
 
 let messagesReceived = 0,
@@ -111,7 +110,7 @@ export class FirehoseSubscription {
     }, 10_000)
   }
 
-  protected queueMessage(message: SubscribeReposMessage, attempt = 0) {
+  protected queueMessage(message: Event, attempt = 0) {
     messagesReceived++
 
     const { did, seq } = didAndSeq(message)
@@ -134,7 +133,7 @@ export class FirehoseSubscription {
         priority: Number.MAX_SAFE_INTEGER - seq,
       })
       .then((res) => {
-        if ('success' in res) {
+        if (res.success) {
           if (queue.size === 0) this.queues.delete(did)
           messagesProcessed++
         } else {
@@ -146,9 +145,7 @@ export class FirehoseSubscription {
       })
   }
 
-  protected processMessage(
-    message: SubscribeReposMessage,
-  ): ReturnType<typeof worker> {
+  protected processMessage(message: Event): ReturnType<typeof worker> {
     return this.piscina.run(message, {
       transferList: 'blocks' in message ? [message.blocks.buffer] : [],
     })
@@ -161,7 +158,7 @@ export class FirehoseSubscription {
   }
 }
 
-function didAndSeq(message: SubscribeReposMessage) {
+function didAndSeq(message: Event) {
   if ('did' in message) return { did: message.did, seq: message.seq }
   else if ('repo' in message) return { did: message.repo, seq: message.seq }
   throw new Error(`message missing did or repo ${JSON.stringify(message)}`)

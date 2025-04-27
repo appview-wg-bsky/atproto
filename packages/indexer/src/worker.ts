@@ -1,25 +1,18 @@
 import { workerData } from 'node:worker_threads'
+import { readCar } from '@atcute/car'
+import type {
+  AccountEvent,
+  CommitEvent,
+  IdentityEvent,
+  SyncEvent,
+} from '@skyware/firehose'
 import { CID } from 'multiformats/cid'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
 import { IdResolver, MemoryCache } from '@atproto/identity'
 import { WriteOpAction } from '@atproto/repo'
-import {
-  Event,
-  parseAccount,
-  parseCommitUnauthenticated,
-  parseIdentity,
-  parseSync,
-} from '@atproto/sync'
-import {
-  RepoEvent,
-  isAccount,
-  isCommit,
-  isIdentity,
-  isSync,
-  isValidRepoEvent,
-} from './lexicons'
-import { type FirehoseSubscriptionOptions, SubscribeReposMessage } from './util'
+import { AtUri } from '@atproto/syntax'
+import type { FirehoseSubscriptionOptions } from './util.js'
 
 if (!workerData) {
   throw new Error('Must be run as a worker')
@@ -40,95 +33,49 @@ const idResolver = new IdResolver({
 const background = new BackgroundQueue(db)
 const indexingSvc = new IndexingService(db, idResolver, background)
 
-export default async function handleMessage(msg: SubscribeReposMessage) {
-  if (!indexingSvc) {
-    throw new Error('Worker not initialized')
-  }
-
-  if ('commit' in msg) msg.commit = parseCid(msg.commit)
-  if ('ops' in msg && msg.ops.length)
-    msg.ops.forEach((op) => {
-      // @ts-expect-error - required but nullable
-      op.cid = op.cid ? parseCid(op.cid) : null
-    })
-
-  const parsed = await parseEvt(isValidRepoEvent(msg))
-  if ('error' in parsed) return parsed
-
-  for (const evt of parsed) {
-    await processEvent(evt)
-  }
-  return { success: true }
-}
-
-async function parseEvt(evt: RepoEvent): Promise<Event[] | { error: unknown }> {
+export default async function handleMessage(
+  msg: CommitEvent | AccountEvent | IdentityEvent | SyncEvent,
+) {
   try {
-    if (isCommit(evt)) {
-      return parseCommitUnauthenticated(evt)
-    } else if (isAccount(evt)) {
-      const parsed = parseAccount(evt)
-      return parsed ? [parsed] : []
-    } else if (isIdentity(evt)) {
-      const parsed = await parseIdentity(idResolver, evt, true)
-      return parsed ? [parsed] : []
-    } else if (isSync(evt)) {
-      const parsed = await parseSync(evt)
-      return parsed ? [parsed] : []
-    } else {
-      return []
-    }
-  } catch (err) {
-    if (err instanceof Error) {
-      switch (err.name) {
-        case 'AbortError':
-          return []
-        case 'TypeError':
-          if (
-            err.cause instanceof Error &&
-            err.cause.name === 'ConnectTimeoutError'
-          ) {
-            return []
-          }
+    if (msg.$type === 'com.atproto.sync.subscribeRepos#identity') {
+      await indexingSvc.indexHandle(msg.did, msg.time, true)
+    } else if (msg.$type === 'com.atproto.sync.subscribeRepos#account') {
+      if (msg.active === false && msg.status === 'deleted') {
+        await indexingSvc.deleteActor(msg.did)
+      } else {
+        await indexingSvc.updateActorStatus(msg.did, msg.active, msg.status)
+      }
+    } else if (msg.$type === 'com.atproto.sync.subscribeRepos#sync') {
+      const cid = parseCid(readCar(msg.blocks).header.data.roots[0])
+      await Promise.all([
+        indexingSvc.setCommitLastSeen(msg.did, cid, msg.rev),
+        indexingSvc.indexHandle(msg.did, msg.time),
+      ])
+    } else if (msg.$type === 'com.atproto.sync.subscribeRepos#commit') {
+      for (const op of msg.ops) {
+        const uri = AtUri.make(msg.repo, ...op.path.split('/'))
+        const indexFn =
+          op.action === 'delete'
+            ? indexingSvc.deleteRecord(uri)
+            : indexingSvc.indexRecord(
+                uri,
+                op.cid,
+                op.record,
+                op.action === 'create'
+                  ? WriteOpAction.Create
+                  : WriteOpAction.Update,
+                msg.time,
+              )
+        background.add(() => indexingSvc.indexHandle(msg.repo, msg.time))
+        await Promise.all([
+          indexFn,
+          indexingSvc.setCommitLastSeen(msg.repo, msg.commit, msg.rev),
+        ])
       }
     }
-    return {
-      error: 'error in parsing and authenticating firehose event ' + evt.seq,
-    }
-  }
-}
-
-async function processEvent(evt: Event) {
-  if (evt.event === 'identity') {
-    return indexingSvc.indexHandle(evt.did, evt.time, true)
-  } else if (evt.event === 'account') {
-    if (evt.active === false && evt.status === 'deleted') {
-      return indexingSvc.deleteActor(evt.did)
-    } else {
-      return indexingSvc.updateActorStatus(evt.did, evt.active, evt.status)
-    }
-  } else if (evt.event === 'sync') {
-    return Promise.all([
-      indexingSvc.setCommitLastSeen(evt.did, evt.cid, evt.rev),
-      indexingSvc.indexHandle(evt.did, evt.time),
-    ])
-  } else {
-    const indexFn =
-      evt.event === 'delete'
-        ? indexingSvc.deleteRecord(evt.uri)
-        : indexingSvc.indexRecord(
-            evt.uri,
-            evt.cid,
-            evt.record,
-            evt.event === 'create'
-              ? WriteOpAction.Create
-              : WriteOpAction.Update,
-            evt.time,
-          )
-    background.add(() => indexingSvc.indexHandle(evt.did, evt.time))
-    await Promise.all([
-      indexFn,
-      indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
-    ])
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err }
   }
 }
 
