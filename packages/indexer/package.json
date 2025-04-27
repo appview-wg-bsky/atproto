@@ -22,13 +22,9 @@
   "dependencies": {
     "@atcute/car": "^3.0.3",
     "@atproto/bsky": "workspace:^",
-    "@atproto/common": "workspace:^",
     "@atproto/identity": "workspace:^",
-    "@atproto/lexicon": "workspace:^",
     "@atproto/repo": "workspace:^",
-    "@atproto/sync": "workspace:^",
     "@atproto/syntax": "workspace:^",
-    "@atproto/xrpc-server": "workspace:^",
     "@redis/client": "^1.6.0",
     "@skyware/firehose": "^0.5.1",
     "multiformats": "^13.3.2",

@@ -1,11 +1,12 @@
 import { availableParallelism } from 'node:os'
 import { SHARE_ENV } from 'node:worker_threads'
-import { createClient } from '@redis/client'
+import { type RedisClientOptions, createClient } from '@redis/client'
 import { type Event, Firehose } from '@skyware/firehose'
 import PQueue from 'p-queue'
 import { FixedQueue, Piscina } from 'piscina'
+import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
+import type { IdentityResolverOpts } from '@atproto/identity'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors.js'
-import { FirehoseSubscriptionOptions } from './util.js'
 import type { default as worker } from './worker.js'
 
 declare module 'piscina' {
@@ -162,4 +163,17 @@ function didAndSeq(message: Event) {
   if ('did' in message) return { did: message.did, seq: message.seq }
   else if ('repo' in message) return { did: message.repo, seq: message.seq }
   throw new Error(`message missing did or repo ${JSON.stringify(message)}`)
+}
+
+export interface FirehoseSubscriptionOptions {
+  service: string
+  dbOptions: PgOptions
+  redisOptions?: RedisClientOptions
+  idResolverOptions?: IdentityResolverOpts
+  minWorkers?: number | undefined
+  maxWorkers?: number | undefined
+  maxConcurrency?: number
+  onError?: (err: Error) => void
+  cursor?: number
+  verbose?: boolean
 }

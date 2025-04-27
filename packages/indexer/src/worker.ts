@@ -12,7 +12,7 @@ import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
 import { IdResolver, MemoryCache } from '@atproto/identity'
 import { WriteOpAction } from '@atproto/repo'
 import { AtUri } from '@atproto/syntax'
-import type { FirehoseSubscriptionOptions } from './util.js'
+import type { FirehoseSubscriptionOptions } from './subscription.js'
 
 if (!workerData) {
   throw new Error('Must be run as a worker')
