@@ -1,4 +1,5 @@
 import { workerData } from 'node:worker_threads'
+import { CID } from 'multiformats/cid'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
 import { IdResolver, MemoryCache } from '@atproto/identity'
@@ -15,13 +16,10 @@ import {
   isAccount,
   isCommit,
   isIdentity,
-  isValidRepoEvent,
   isSync,
+  isValidRepoEvent,
 } from './lexicons'
-import { type FirehoseSubscriptionOptions } from './util'
-import type { ComAtprotoSyncSubscribeRepos } from '@atproto/api'
-import { ParsedCommit } from '@skyware/firehose'
-import { CID } from 'multiformats/cid'
+import { type FirehoseSubscriptionOptions, SubscribeReposMessage } from './util'
 
 if (!workerData) {
   throw new Error('Must be run as a worker')
@@ -42,19 +40,15 @@ const idResolver = new IdResolver({
 const background = new BackgroundQueue(db)
 const indexingSvc = new IndexingService(db, idResolver, background)
 
-type Message =
-  | ComAtprotoSyncSubscribeRepos.Account
-  | ComAtprotoSyncSubscribeRepos.Identity
-  | ComAtprotoSyncSubscribeRepos.Sync
-  | ParsedCommit
-export default async function handleMessage(msg: Message) {
+export default async function handleMessage(msg: SubscribeReposMessage) {
   if (!indexingSvc) {
     throw new Error('Worker not initialized')
   }
 
-  if ('commit' in msg) msg.commit = CID.parse(msg.commit.$link)
-  if ('ops' in msg)
-    msg.ops?.forEach((op) => {
+  if ('commit' in msg && msg.commit.$link)
+    msg.commit = CID.parse(msg.commit.$link)
+  if ('ops' in msg && msg.ops.length)
+    msg.ops.forEach((op) => {
       // @ts-expect-error - required but nullable
       op.cid = op.cid ? CID.parse(op.cid) : null
     })
@@ -65,6 +59,7 @@ export default async function handleMessage(msg: Message) {
   for (const evt of parsed) {
     await processEvent(evt)
   }
+  return { success: true }
 }
 
 async function parseEvt(evt: RepoEvent): Promise<Event[] | { error: unknown }> {
