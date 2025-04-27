@@ -45,12 +45,11 @@ export default async function handleMessage(msg: SubscribeReposMessage) {
     throw new Error('Worker not initialized')
   }
 
-  if ('commit' in msg && msg.commit.$link)
-    msg.commit = CID.parse(msg.commit.$link)
+  if ('commit' in msg) msg.commit = parseCid(msg.commit)
   if ('ops' in msg && msg.ops.length)
     msg.ops.forEach((op) => {
       // @ts-expect-error - required but nullable
-      op.cid = op.cid ? CID.parse(op.cid) : null
+      op.cid = op.cid ? parseCid(op.cid) : null
     })
 
   const parsed = await parseEvt(isValidRepoEvent(msg))
@@ -131,4 +130,19 @@ async function processEvent(evt: Event) {
       indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
     ])
   }
+}
+
+function parseCid(
+  cid: { $link: string } | { bytes: Uint8Array } | CID | string,
+) {
+  if (cid instanceof CID) {
+    return cid
+  } else if (typeof cid === 'string') {
+    return CID.parse(cid)
+  } else if ('$link' in cid) {
+    return CID.parse(cid.$link)
+  } else if ('bytes' in cid) {
+    return CID.decode(cid.bytes)
+  }
+  throw new Error('Invalid CID ' + JSON.stringify(cid))
 }

@@ -48,9 +48,6 @@ export class FirehoseSubscription {
       relay: this.opts.service,
       cursor: this.opts.cursor?.toString(),
     })
-    this.firehose.on('error', (err) => {
-      this.opts.onError?.(new FirehoseSubscriptionError(err))
-    })
 
     const { dbOptions, idResolverOptions } = this.opts
 
@@ -99,18 +96,24 @@ export class FirehoseSubscription {
       this.firehose?.close()
       return this.start()
     })
+    this.firehose.on('close', () => {
+      console.log('firehose closed, exiting...')
+      this.destroy()
+    })
 
     this.firehose.start()
 
     setInterval(() => {
       console.log(
-        `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesReceived / 10)} (${Math.round((messagesProcessed / messagesReceived) * 100)}%) [${this.piscina.threads.length}]`,
+        `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesReceived / 10)} per sec (${Math.round((messagesProcessed / messagesReceived) * 100)}%) [${this.piscina.threads.length}]`,
       )
       messagesReceived = messagesProcessed = 0
     }, 10_000)
   }
 
   protected queueMessage(message: SubscribeReposMessage, attempt = 0) {
+    messagesReceived++
+
     const { did, seq } = didAndSeq(message)
 
     if (attempt > MAX_ATTEMPTS) {
