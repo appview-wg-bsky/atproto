@@ -5,39 +5,12 @@ import type { IdentityResolverOpts } from '@atproto/identity'
 export interface FirehoseSubscriptionOptions {
   service: string
   dbOptions: PgOptions
-  redisOptions: RedisClientOptions
+  redisOptions?: RedisClientOptions
   idResolverOptions?: IdentityResolverOpts
-  minWorkers?: number
-  maxWorkers?: number
+  minWorkers?: number | undefined
+  maxWorkers?: number | undefined
+  maxConcurrency?: number
   onError?: (err: Error) => void
   cursor?: number
-  scaleCheckIntervalMs?: number
-}
-
-export interface WorkerData {
-  processedPerMinute?: number | null
-  averageProcessingTime?: number | null
-  maxed?: boolean
-}
-
-export type WorkerResponse =
-  | {
-      type: 'processed'
-      id: string
-      time: number
-    }
-  | {
-      type: 'seq'
-      seq: string
-    }
-  | {
-      type: 'error'
-      error: Error
-    }
-  | { type: 'maxed'; maxed: boolean }
-
-export const logVerbose = (str: string, frequency = 1): void => {
-  if (process.env.LOG_VERBOSE === 'true' && Math.random() < frequency) {
-    console.log('VERBOSE:', str)
-  }
+  verbose?: boolean
 }

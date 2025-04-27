@@ -1,217 +1,84 @@
-import { cpus } from 'node:os'
+import { availableParallelism } from 'node:os'
 import * as path from 'node:path'
-import { SHARE_ENV, Worker } from 'node:worker_threads'
-import { createClient } from '@redis/client'
-import { WebSocketKeepAlive } from '@atproto/xrpc-server/dist/stream/websocket-keepalive'
+import { SHARE_ENV } from 'node:worker_threads'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
-import {
-  FirehoseSubscriptionOptions,
-  WorkerData,
-  WorkerResponse,
-  logVerbose,
-} from './util'
+import { FirehoseSubscriptionOptions } from './util'
+import { Firehose } from '@skyware/firehose'
+import Piscina, { FixedQueue } from 'piscina'
+import type {
+  PiscinaLoadBalancer,
+  PiscinaWorker,
+} from 'piscina/dist/worker_pool'
+import PQueue from 'p-queue'
+import { createClient } from '@redis/client'
 
-const WORKER_PATH = path.join(__dirname, 'worker.js')
-export const REDIS_STREAM_NAME = 'bsky_indexer:firehose'
-export const REDIS_GROUP_NAME = 'bsky_indexer_consumers'
+declare module 'piscina' {
+  interface PiscinaTask {
+    [Piscina.queueOptionsSymbol]: {
+      did: string
+      seq: number
+      attempt?: number
+    }
+  }
+}
+
 const REDIS_SEQ_KEY = 'bsky_indexer:seq'
+const WORKER_PATH = path.join(__dirname, 'worker.js')
+const MAX_ATTEMPTS = 5
+
+let messagesReceived = 0,
+  messagesProcessed = 0
 
 export class FirehoseSubscription {
-  private redis: ReturnType<typeof createClient>
-  private workers: Map<number, { worker: Worker; data: WorkerData }> = new Map()
-  private ws: WebSocketKeepAlive | null = null
-  private destroyed = false
-  private scaleCheckInterval: NodeJS.Timeout | null = null
-  private needsToScale = 0
-  private totalPending = 0
+  protected firehose: Firehose
+  protected balancer: DidQueueBalancer
+  protected piscina: Piscina
+  protected redis: ReturnType<typeof createClient>
 
-  private settings = {
-    scaleCheckIntervalMs: 5_000,
-    minWorkers: 2,
-    maxWorkers: cpus().length * 4,
+  protected settings = {
+    minWorkers: 16,
+    maxWorkers: availableParallelism() * 4,
+    maxConcurrency: 50,
   }
 
-  constructor(private opts: FirehoseSubscriptionOptions) {
+  constructor(protected opts: FirehoseSubscriptionOptions) {
     if (this.opts.minWorkers) this.settings.minWorkers = this.opts.minWorkers
     if (this.opts.maxWorkers) this.settings.maxWorkers = this.opts.maxWorkers
-    if (this.opts.scaleCheckIntervalMs)
-      this.settings.scaleCheckIntervalMs = this.opts.scaleCheckIntervalMs
+    if (this.opts.maxConcurrency)
+      this.settings.maxConcurrency = this.opts.maxConcurrency
 
-    this.redis = createClient(this.opts.redisOptions)
-    this.redis.on('error', (err) => {
-      this.opts.onError?.(err)
+    this.firehose = new Firehose({
+      relay: this.opts.service,
+      cursor: this.opts.cursor?.toString(),
+    })
+    this.firehose.on('error', (err) => {
+      this.opts.onError?.(new FirehoseSubscriptionError(err))
     })
 
-    for (let i = 0; i < this.settings.minWorkers; i++) {
-      this.setupWorker()
-    }
-  }
+    this.balancer = new DidQueueBalancer(this.settings.maxConcurrency)
 
-  private setupWorker() {
-    const { dbOptions, redisOptions, idResolverOptions } = this.opts
-    const worker = new Worker(WORKER_PATH, {
+    const { dbOptions, idResolverOptions } = this.opts
+
+    this.piscina = new Piscina({
+      filename: WORKER_PATH,
+      env: SHARE_ENV,
+      minThreads: this.settings.minWorkers,
+      maxThreads: this.settings.maxWorkers,
+      concurrentTasksPerWorker: this.settings.maxConcurrency,
+      idleTimeout: 30_000,
+      taskQueue: new FixedQueue(),
+      loadBalancer: this.balancer.balancer.bind(this.balancer),
       workerData: {
         dbOptions,
-        redisOptions,
         idResolverOptions,
       },
-      env: SHARE_ENV,
     })
 
-    this.workers.set(worker.threadId, {
-      worker,
-      data: {},
-    })
-
-    worker.on('message', (msg: WorkerResponse) => {
-      const data = this.workers.get(worker.threadId)?.data ?? {}
-
-      if (msg.type === 'processed') {
-        // logVerbose(
-        //   `received from worker [${worker.threadId}]: ${msg.id}`,
-        //   0.0005,
-        // )
-        void this.onProcessed(msg.id).catch((err) => this.opts.onError?.(err))
-
-        typeof data.processedPerMinute === 'number'
-          ? (data.processedPerMinute += 1)
-          : (data.processedPerMinute = 1)
-
-        typeof data.averageProcessingTime === 'number'
-          ? (data.averageProcessingTime =
-              (data.averageProcessingTime * data.processedPerMinute +
-                msg.time) /
-              (data.processedPerMinute + 1))
-          : (data.averageProcessingTime = msg.time)
-
-        this.workers.set(worker.threadId, {
-          worker,
-          data,
-        })
-      } else if (msg.type === 'maxed') {
-        data.maxed = msg.maxed
-        this.workers.set(worker.threadId, {
-          worker,
-          data,
-        })
-      } else if (msg.type === 'seq') {
-        const seq = msg.seq || null
-        if (seq) {
-          void this.redis.set(REDIS_SEQ_KEY, seq).catch((err) => {
-            this.opts.onError?.(err)
-          })
-        }
-      } else if (msg.type === 'error') {
-        this.opts.onError?.(msg.error)
-      }
-    })
-
-    worker.on('error', (err) => {
-      this.opts.onError?.(new FirehoseWorkerError(err))
-      if (this.workers.delete(worker.threadId))
-        worker.terminate().then(() => this.setupWorker())
-    })
-  }
-
-  private async checkScaling() {
-    if (this.workers.size > this.settings.maxWorkers) {
-      Array.from(this.workers.values())
-        .sort((a, b) => b.worker.threadId - a.worker.threadId)
-        .slice(0, this.workers.size - this.settings.maxWorkers)
-        .forEach(
-          ({ worker }) =>
-            this.workers.delete(worker.threadId) && worker.terminate(),
-        )
-      console.log(
-        `killed ${this.workers.size - this.settings.maxWorkers} extra workers`,
-      )
-    }
-
-    const streamLength = await this.redis.xLen(REDIS_STREAM_NAME)
-    if (typeof streamLength !== 'number' || isNaN(streamLength)) {
-      console.warn(`invalid stream length: ${streamLength}`)
-      return
-    }
-
-    logVerbose(
-      `pending: ${streamLength} | previously: ${this.totalPending} | scaling: ${this.needsToScale}`,
-    )
-
-    // We need to scale soon if the backlog is growing or if it's just too big
-    if (
-      (streamLength > this.totalPending && streamLength > 5_000) ||
-      streamLength > 20_000
-    ) {
-      this.needsToScale += 2
-    } else this.needsToScale = Math.max(0, this.needsToScale - 1)
-    this.totalPending = streamLength
-
-    // Scale up if the pending count has increased for the last 3 cycles
-    if (this.needsToScale >= 5) {
-      if (this.workers.size >= this.settings.maxWorkers) {
-        console.warn(`pending count ${streamLength} but max workers reached`)
-        return
-      }
-
-      const newWorkersCount =
-        Math.min(
-          this.settings.maxWorkers,
-          this.workers.size + Math.ceil(this.workers.size * 0.33), // Add 33% more workers
-        ) - this.workers.size
-      console.log(
-        `spawning ${newWorkersCount} workers for a total of ${newWorkersCount + this.workers.size}`,
-      )
-      for (let i = 0; i < newWorkersCount; i++) {
-        this.setupWorker()
-      }
-
-      this.needsToScale = 0
-      return
-    }
-    // Scale down if we're well ahead
-    else if (
-      streamLength < 1000 &&
-      this.workers.size > this.settings.minWorkers
-    ) {
-      const targetWorkers = this.workers.size - 1
-      if (targetWorkers < this.settings.minWorkers) return
-
-      console.log(`killing 1 worker for a total of ${targetWorkers}`)
-      const toTerminate = [...this.workers.values()].sort(
-        (a, b) => b.worker.threadId - a.worker.threadId,
-      )[0]?.worker
-
-      if (!toTerminate) return
-
-      const { threadId } = toTerminate
-      await toTerminate.terminate()
-      this.workers.delete(threadId)
-      console.log(`killed worker ${threadId}`)
-
-      return
-    }
-
-    // If more than half of workers are maxed out, add one
-    if (
-      [...this.workers.values()].filter(({ data }) => data.maxed).length >=
-      this.workers.size / 2
-    ) {
-      console.log(`spawning 1 worker for a total of ${this.workers.size + 1}`)
-      this.setupWorker()
-      return
-    }
+    this.redis = createClient(this.opts.redisOptions)
   }
 
   async start() {
     await this.redis.connect()
-
-    try {
-      await this.redis.xGroupCreate(REDIS_STREAM_NAME, REDIS_GROUP_NAME, '$', {
-        MKSTREAM: true,
-      })
-    } catch {
-      // will throw if the stream already exists
-    }
 
     const initialCursor = await this.redis.get(REDIS_SEQ_KEY)
 
@@ -221,82 +88,158 @@ export class FirehoseSubscription {
       console.log(`starting from cursor: ${this.opts.cursor}`)
     else console.log(`starting from latest`)
 
-    try {
-      this.ws = new WebSocketKeepAlive({
-        getUrl: async () => {
-          const cursor = initialCursor || `${this.opts.cursor}`
-          const params =
-            cursor && !isNaN(parseInt(cursor)) ? { cursor } : undefined
-          const query = new URLSearchParams(params).toString()
-          return `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos${query ? '?' + query : ''}`
-        },
-      })
+    this.firehose = new Firehose({
+      relay: this.opts.service,
+      cursor: initialCursor ?? this.opts.cursor?.toString(),
+    })
 
-      if (this.scaleCheckInterval) clearInterval(this.scaleCheckInterval)
-      // Only start the scale check after 30 seconds, to give the workers time to get going
-      setTimeout(() => {
-        this.scaleCheckInterval = setInterval(
-          () => this.checkScaling(),
-          this.settings.scaleCheckIntervalMs,
-        )
-      }, 30_000)
-
-      setInterval(() => this.logWorkerStats(), 30_000)
-
-      for await (const chunk of this.ws) {
-        if (this.destroyed) break
-        void this.handleMessage(chunk).catch((err) => {
-          this.opts.onError?.(new FirehoseSubscriptionError(err))
-        })
-      }
-    } catch (err) {
+    this.firehose.on('commit', (c) => this.handleMessage(c.repo, c.seq, c))
+    this.firehose.on('account', (a) => this.handleMessage(a.did, a.seq, a))
+    this.firehose.on('identity', (i) => this.handleMessage(i.did, i.seq, i))
+    this.firehose.on('sync', (s) => this.handleMessage(s.did, s.seq, s))
+    this.firehose.on('info', (info) => {
+      console.info(`[FIREHOSE] ${info}`)
+    })
+    this.firehose.on('error', (err) => {
       this.opts.onError?.(new FirehoseSubscriptionError(err))
-      if (!this.destroyed) {
-        this.ws?.ws?.close()
-        await this.start()
+      this.firehose?.close()
+      return this.start()
+    })
+
+    setInterval(() => {
+      console.log(
+        `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesReceived / 10)} (${Math.round((messagesProcessed / messagesReceived) * 100)}%)`,
+      )
+      messagesReceived = messagesProcessed = 0
+    }, 10_000)
+  }
+
+  async handleMessage(
+    did: string,
+    seq: number,
+    message: object,
+    attempt = 0,
+  ): Promise<void> {
+    messagesReceived++
+
+    if (attempt > MAX_ATTEMPTS) {
+      console.error(`max attempts reached for ${did} ${seq}`, message)
+      return
+    }
+
+    const res = await this.piscina.run(
+      this.makeTask(did, seq, message, attempt),
+    )
+    if (res.success) {
+      await this.onProcessed(did, seq)
+      messagesProcessed++
+    } else {
+      if (res.error) {
+        console.warn(new FirehoseWorkerError(res.error))
       }
+      return this.handleMessage(did, seq, message, attempt + 1)
     }
   }
 
-  async handleMessage(chunk: Uint8Array) {
-    return this.redis.xAdd(REDIS_STREAM_NAME, '*', {
-      data: Buffer.from(chunk).toString('base64'),
-    })
+  async onProcessed(did: string, seq: number) {
+    const worker = this.balancer.queues.get(did)
+    if (!worker) return
+
+    const resolve = worker.tasks.get(seq)
+    if (!resolve) return
+
+    resolve()
+    worker.tasks.delete(seq)
+    if (worker.queue.size === 0 || worker.tasks.size === 0) {
+      this.balancer.queues.delete(did)
+    }
   }
 
-  async onProcessed(id: string) {
-    await this.redis.xDel(REDIS_STREAM_NAME, id)
-  }
-
-  logWorkerStats() {
-    const workers = [...this.workers.values()].sort(
-      (a, b) => b.worker.threadId - a.worker.threadId,
-    )
-
-    console.log(
-      workers
-        .map(({ data }) => {
-          const processed = ((data.processedPerMinute ?? 0) / 60).toFixed(2)
-          const avg = data.averageProcessingTime?.toFixed(2) ?? '?'
-
-          data.processedPerMinute = null
-          data.averageProcessingTime = null
-
-          return `${processed}/s; ${avg}ms/`
-        })
-        .join(' | '),
-    )
+  protected makeTask(did: string, seq: number, message: object, attempt = 0) {
+    return {
+      ...message,
+      [Piscina.queueOptionsSymbol]: {
+        did,
+        seq,
+        attempt,
+      },
+    }
   }
 
   async destroy() {
-    this.destroyed = true
-    if (this.scaleCheckInterval) {
-      clearInterval(this.scaleCheckInterval)
-    }
-    this.ws?.ws?.close()
+    this.firehose?.close()
+    await this.piscina.close({ force: true })
+    await this.redis.quit()
+  }
+}
 
-    await Promise.all(
-      [...this.workers.values()].map(({ worker }) => worker.terminate()),
-    )
+class DidQueueBalancer {
+  queues: Map<
+    string,
+    { queue: PQueue; worker: PiscinaWorker; tasks: Map<number, () => void> }
+  >
+  baseBalancer: PiscinaLoadBalancer
+
+  constructor(maxConcurrency: number) {
+    this.queues = new Map()
+    this.baseBalancer = LeastBusyBalancer({ maximumUsage: maxConcurrency })
+  }
+
+  balancer: PiscinaLoadBalancer = (task, workers) => {
+    const { did, seq, attempt } = task[Piscina.queueOptionsSymbol]
+    if (!did || !seq) {
+      console.error(`task missing did or seq`, task)
+      return this.baseBalancer(task, workers)
+    }
+
+    let didData = this.queues.get(did)
+    if (!didData) {
+      const worker = this.baseBalancer(task, workers)
+      if (!worker) {
+        console.warn(`failed to acquire worker for event ${seq} for ${did}`)
+        return null
+      }
+
+      didData = {
+        worker,
+        queue: new PQueue({ concurrency: 1, timeout: 120_000 }),
+        tasks: new Map(),
+      }
+    }
+
+    // The resolve function in the tasks map needs to be called by the subscription
+    // when the event is processed, to allow the next event from this did to be processed
+    const promise = new Promise<void>((resolve) => {
+      didData.tasks.set(seq, resolve)
+    })
+    void didData.queue.add(() => promise)
+    return didData.worker
+  }
+}
+
+// https://github.com/piscinajs/piscina/blob/c1221608783174ea73e7dee482ee20fea6053bfe/src/worker_pool/balancer/index.ts
+function LeastBusyBalancer(opts: {
+  maximumUsage: number
+}): PiscinaLoadBalancer {
+  const { maximumUsage } = opts
+
+  return (task, workers) => {
+    let candidate: PiscinaWorker | null = null
+    let checkpoint = maximumUsage
+    for (const worker of workers) {
+      if (worker.currentUsage === 0) {
+        candidate = worker
+        break
+      }
+
+      if (worker.isRunningAbortableTask) continue
+
+      if (!task.isAbortable && worker.currentUsage < checkpoint) {
+        candidate = worker
+        checkpoint = worker.currentUsage
+      }
+    }
+
+    return candidate
   }
 }

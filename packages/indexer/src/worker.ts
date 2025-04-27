@@ -1,227 +1,73 @@
-import { parentPort, threadId, workerData } from 'node:worker_threads'
-import { createClient } from '@redis/client'
+import { workerData } from 'node:worker_threads'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
 import { IdResolver, MemoryCache } from '@atproto/identity'
 import { WriteOpAction } from '@atproto/repo'
 import {
   Event,
-  FirehoseParseError,
   parseAccount,
   parseCommitUnauthenticated,
   parseIdentity,
+  parseSync,
 } from '@atproto/sync'
-import { ensureChunkIsMessage } from '@atproto/xrpc-server'
-import { FirehoseWorkerError } from './errors'
 import {
   RepoEvent,
   isAccount,
   isCommit,
   isIdentity,
   isValidRepoEvent,
+  isSync,
 } from './lexicons'
-import { REDIS_GROUP_NAME, REDIS_STREAM_NAME } from './subscription'
-import {
-  type FirehoseSubscriptionOptions,
-  type WorkerResponse,
-  logVerbose,
-} from './util'
-
-interface Message {
-  id: string | null
-  data: Buffer | null
-}
+import { type FirehoseSubscriptionOptions } from './util'
+import type { ComAtprotoSyncSubscribeRepos } from '@atproto/api'
+import { ParsedCommit } from '@skyware/firehose'
+import { CID } from 'multiformats/cid'
 
 if (!workerData) {
   throw new Error('Must be run as a worker')
 }
 
-let redis: ReturnType<typeof createClient>
-let indexingSvc: IndexingService
-let background: BackgroundQueue
-let idResolver: IdResolver
-
-void main()
-
-async function main() {
-  await init()
-
-  let cursor: string | null = null
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { cursor: nextCursor, ...message } = await readNextMessage(cursor)
-
-    await queueMessage(message)
-    cursor = nextCursor
-  }
+const { dbOptions, idResolverOptions } =
+  workerData as FirehoseSubscriptionOptions
+if (!dbOptions || !idResolverOptions) {
+  throw new Error('worker missing options')
 }
 
-async function init() {
-  const { dbOptions, redisOptions, idResolverOptions } =
-    workerData as FirehoseSubscriptionOptions
-  if (!dbOptions || !redisOptions || !idResolverOptions) {
-    throw new Error('worker missing options')
-  }
+const db = new Database(dbOptions)
 
-  redis = createClient(redisOptions)
-  await redis.connect()
+const idResolver = new IdResolver({
+  ...idResolverOptions,
+  didCache: new MemoryCache(),
+})
+const background = new BackgroundQueue(db)
+const indexingSvc = new IndexingService(db, idResolver, background)
 
-  const db = new Database(dbOptions)
-  idResolver = new IdResolver({
-    ...idResolverOptions,
-    didCache: new MemoryCache(),
-  })
-  background = new BackgroundQueue(db)
-  indexingSvc = new IndexingService(db, idResolver, background)
-}
-
-async function readNextMessage(cursor: string | null = null): Promise<
-  Message & {
-    cursor: string | null
-  }
-> {
-  const ret: Message & { cursor: string | null } = {
-    id: null,
-    data: null,
-    cursor: null,
-  }
-
-  let msg: { id: string; message: { data?: string } } | null = null
-
-  try {
-    // First try to claim unclaimed messages
-    msg = await redis
-      .xAutoClaim(
-        REDIS_STREAM_NAME,
-        REDIS_GROUP_NAME,
-        `${process.pid}`,
-        60_000,
-        cursor || '0-0',
-        { COUNT: 1 },
-      )
-      .then((res) => {
-        ret.cursor = res?.nextId ?? null
-        return res?.messages?.[0] ?? null
-      })
-
-    if (!msg?.message?.data?.length) {
-      // If there's nothing, read from the stream
-      msg = await redis
-        .xReadGroup(
-          REDIS_GROUP_NAME,
-          `${process.pid}`,
-          { key: REDIS_STREAM_NAME, id: '>' },
-          {
-            COUNT: 1,
-            BLOCK: 5000,
-          },
-        )
-        .then((res) => res?.[0]?.messages?.[0] ?? null)
-    }
-
-    if (!msg?.message?.data?.length)
-      throw new Error('missing data in ' + msg?.id || 'unknown message')
-
-    ret.id = msg.id
-    ret.data = Buffer.from(msg.message.data, 'base64')
-  } catch (err) {
-    console.warn('error reading message', err)
-  }
-
-  ret.cursor ||= '0-0'
-
-  return ret
-}
-
-async function queueMessage({ id, data }: Message) {
-  if (!id || !data) {
-    console.warn('invalid message', id, data)
-    return
-  }
-
-  const start = performance.now()
-  await waitUntilQueueLessThan(10_000)
-  const waited = performance.now() - start
-  if (waited > 1000) {
-    logVerbose(`[${threadId}] waited ${waited.toFixed(1)}ms`)
-  }
-
-  void background.add(async () => {
-    try {
-      const start = performance.now()
-      await handleMessage(data)
-      const time = performance.now() - start
-
-      if (time > 1000) {
-        logVerbose(
-          `[${threadId}] ${time.toFixed(1)}ms to process ${id} (${background.queue.size})`,
-        )
-      }
-
-      parentPort?.postMessage({
-        type: 'processed',
-        id,
-        time,
-      } satisfies WorkerResponse)
-    } catch (err) {
-      return parentPort?.postMessage({
-        type: 'error',
-        error: new FirehoseWorkerError(err),
-      } satisfies WorkerResponse)
-    }
-  })
-}
-
-async function handleMessage(msg: Buffer) {
+type Message =
+  | ComAtprotoSyncSubscribeRepos.Account
+  | ComAtprotoSyncSubscribeRepos.Identity
+  | ComAtprotoSyncSubscribeRepos.Sync
+  | ParsedCommit
+export default async function handleMessage(msg: Message) {
   if (!indexingSvc) {
     throw new Error('Worker not initialized')
   }
 
-  const message = ensureChunkIsMessage(msg)
-  const t = message.header.t
-  const clone: Record<string, unknown> | undefined =
-    message.body !== undefined ? { ...message.body } : undefined
-  if (clone !== undefined && t !== undefined) {
-    clone['$type'] = t.startsWith('#')
-      ? 'com.atproto.sync.subscribeRepos' + t
-      : t
-  }
+  if ('commit' in msg) msg.commit = CID.parse(msg.commit.$link)
+  if ('ops' in msg)
+    msg.ops?.forEach((op) => {
+      // @ts-expect-error - required but nullable
+      op.cid = op.cid ? CID.parse(op.cid) : null
+    })
 
-  let event: RepoEvent
-  try {
-    event = isValidRepoEvent(clone)
-    if (event === undefined) throw new Error('empty event')
-  } catch (err) {
-    parentPort?.postMessage({
-      type: 'error',
-      error: new FirehoseWorkerError(err),
-    } satisfies WorkerResponse)
-    return
-  }
+  const parsed = await parseEvt(isValidRepoEvent(msg))
+  if ('error' in parsed) return parsed
 
-  const parsed = await parseEvt(event)
-
-  const now = performance.now()
   for (const evt of parsed) {
-    if (evt.seq % 1000 === 0) {
-      parentPort?.postMessage({
-        type: 'seq',
-        seq: `${evt.seq}`,
-      })
-    }
     await processEvent(evt)
-  }
-  const elapsed = performance.now() - now
-
-  if (elapsed > 1000) {
-    logVerbose(
-      // @ts-expect-error
-      `[${threadId}] ${elapsed.toFixed(1)}ms to process ${parsed?.[0]?.event} ${parsed?.[0]?.collection}`,
-    )
   }
 }
 
-async function parseEvt(evt: RepoEvent): Promise<Event[]> {
+async function parseEvt(evt: RepoEvent): Promise<Event[] | { error: unknown }> {
   try {
     if (isCommit(evt)) {
       return parseCommitUnauthenticated(evt)
@@ -230,6 +76,9 @@ async function parseEvt(evt: RepoEvent): Promise<Event[]> {
       return parsed ? [parsed] : []
     } else if (isIdentity(evt)) {
       const parsed = await parseIdentity(idResolver, evt, true)
+      return parsed ? [parsed] : []
+    } else if (isSync(evt)) {
+      const parsed = await parseSync(evt)
       return parsed ? [parsed] : []
     } else {
       return []
@@ -248,11 +97,9 @@ async function parseEvt(evt: RepoEvent): Promise<Event[]> {
           }
       }
     }
-    parentPort?.postMessage({
-      type: 'error',
-      error: new FirehoseParseError(err, evt),
-    })
-    return []
+    return {
+      error: 'error in parsing and authenticating firehose event ' + evt.seq,
+    }
   }
 }
 
@@ -289,21 +136,4 @@ async function processEvent(evt: Event) {
       indexingSvc.setCommitLastSeen(evt.did, evt.commit, evt.rev),
     ])
   }
-}
-
-async function waitUntilQueueLessThan(size: number) {
-  if (background.queue.size < size) return
-
-  parentPort?.postMessage({ type: 'maxed', maxed: true })
-
-  return new Promise<void>((resolve) => {
-    const listener = () => {
-      if (background.queue.size < size) {
-        background.queue.off('next', listener)
-        parentPort?.postMessage({ type: 'maxed', maxed: false })
-        resolve()
-      }
-    }
-    background.queue.on('next', listener)
-  })
 }

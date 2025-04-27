@@ -26,10 +26,11 @@ const main = async () => {
     dbOptions,
     idResolverOptions,
     redisOptions: { url: env.redisUrl },
-    minWorkers: env.minWorkers ?? 10,
-    maxWorkers: env.maxWorkers ?? 50,
+    minWorkers: env.minWorkers,
+    maxWorkers: env.maxWorkers,
     onError: (err) =>
       console.error(...(err.cause ? [err.message, err.cause] : [err])),
+    verbose: env.verbose,
   })
 
   void sub.start()
@@ -54,6 +55,7 @@ const getEnv = () => ({
   maxWorkers: process.env.SUB_MAX_WORKERS
     ? parseInt(process.env.SUB_MAX_WORKERS)
     : undefined,
+  verbose: process.env.LOG_VERBOSE === 'true',
 })
 
 void main()

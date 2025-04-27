@@ -28,10 +28,13 @@
     "@atproto/sync": "workspace:^",
     "@atproto/xrpc-server": "workspace:^",
     "@redis/client": "^1.6.0",
+    "@skyware/firehose": "^0.4.3",
     "multiformats": "^9.9.0",
-    "p-queue": "^6.6.2"
+    "p-queue": "^6.6.2",
+    "piscina": "^5.0.0-alpha.2"
   },
   "devDependencies": {
+    "@atproto/api": "workspace:^",
     "typescript": "^5.6.3"
   }
 }
