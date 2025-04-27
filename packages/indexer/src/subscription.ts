@@ -1,16 +1,16 @@
 import { availableParallelism } from 'node:os'
 import * as path from 'node:path'
 import { SHARE_ENV } from 'node:worker_threads'
-import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
-import { FirehoseSubscriptionOptions } from './util'
+import { createClient } from '@redis/client'
 import { Firehose } from '@skyware/firehose'
+import PQueue from 'p-queue'
 import Piscina, { FixedQueue } from 'piscina'
 import type {
   PiscinaLoadBalancer,
   PiscinaWorker,
 } from 'piscina/dist/worker_pool'
-import PQueue from 'p-queue'
-import { createClient } from '@redis/client'
+import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors'
+import { FirehoseSubscriptionOptions } from './util'
 
 declare module 'piscina' {
   interface PiscinaTask {
@@ -105,6 +105,8 @@ export class FirehoseSubscription {
       this.firehose?.close()
       return this.start()
     })
+
+    this.firehose.start()
 
     setInterval(() => {
       console.log(
