@@ -1,4 +1,4 @@
-export * from './subscription'
-export * from './util'
-export * from './errors'
-export type { RepoEvent } from './lexicons'
+export * from './subscription.js'
+export * from './util.js'
+export * from './errors.js'
+export type { RepoEvent } from './lexicons.js'

@@ -5,6 +5,8 @@
     "outDir": "./dist",
     "noUnusedLocals": false,
     "noImplicitAny": true,
+    "skipLibCheck": true,
+    "lib": ["ES2023", "ScriptHost"],
   },
   "include": ["./src"]
 }
