@@ -8,7 +8,7 @@ import type {
 } from '@skyware/firehose'
 import { CID } from 'multiformats/cid'
 import { BackgroundQueue, Database } from '@atproto/bsky'
-import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing'
+import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing/index.js'
 import { IdResolver, MemoryCache } from '@atproto/identity'
 import { WriteOpAction } from '@atproto/repo'
 import { AtUri } from '@atproto/syntax'
