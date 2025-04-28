@@ -6,7 +6,10 @@
     "noUnusedLocals": false,
     "noImplicitAny": true,
     "skipLibCheck": true,
+    "noEmit": false,
+    "allowImportingTsExtensions": false,
     "lib": ["ES2023", "ScriptHost"],
+    "target": "ESNext"
   },
   "include": ["./src"]
 }
