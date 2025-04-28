@@ -32,7 +32,7 @@ let messagesReceived = 0,
 export class FirehoseSubscription {
   protected firehose: Firehose
   protected piscina: Piscina
-  protected redis: ReturnType<typeof createClient>
+  protected redis?: ReturnType<typeof createClient>
   protected queues = new Map<string, PQueue>()
 
   protected settings = {
@@ -68,13 +68,16 @@ export class FirehoseSubscription {
       },
     })
 
-    this.redis = createClient(this.opts.redisOptions)
+    if (this.opts.redisOptions)
+      this.redis = createClient(this.opts.redisOptions)
   }
 
   async start() {
-    if (!this.redis.isOpen) await this.redis.connect()
+    if (this.opts.redisOptions && !this.redis.isOpen) await this.redis.connect()
 
-    const initialCursor = await this.redis.get(REDIS_SEQ_KEY)
+    const initialCursor = this.opts.redisOptions
+      ? await this.redis.get(REDIS_SEQ_KEY)
+      : null
 
     if (initialCursor)
       console.log(`starting from initial cursor: ${initialCursor}`)
