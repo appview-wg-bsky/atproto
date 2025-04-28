@@ -2,7 +2,7 @@ import { availableParallelism } from 'node:os'
 import { SHARE_ENV } from 'node:worker_threads'
 import { type RedisClientOptions, createClient } from '@redis/client'
 import { type Event, Firehose } from '@skyware/firehose'
-import PQueue from 'p-queue'
+import PQueue from 'p-queue/dist/index.js' // https://github.com/sindresorhus/p-queue/issues/145
 import { FixedQueue, Piscina } from 'piscina'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
 import type { IdentityResolverOpts } from '@atproto/identity'
