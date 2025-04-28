@@ -23,6 +23,7 @@
     "@atcute/car": "^3.0.3",
     "@atproto/bsky": "workspace:^",
     "@atproto/identity": "workspace:^",
+    "@atproto/lexicon": "workspace:^",
     "@atproto/repo": "workspace:^",
     "@atproto/syntax": "workspace:^",
     "@redis/client": "^1.6.0",

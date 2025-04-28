@@ -10,6 +10,7 @@ import { CID } from 'multiformats/cid'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing/index.js'
 import { IdResolver, MemoryCache } from '@atproto/identity'
+import { jsonToLex } from '@atproto/lexicon'
 import { WriteOpAction } from '@atproto/repo'
 import { AtUri } from '@atproto/syntax'
 import type { FirehoseSubscriptionOptions } from './subscription.js'
@@ -60,7 +61,7 @@ export default async function handleMessage(
             : indexingSvc.indexRecord(
                 uri,
                 op.cid,
-                op.record,
+                jsonToLex(op.record),
                 op.action === 'create'
                   ? WriteOpAction.Create
                   : WriteOpAction.Update,

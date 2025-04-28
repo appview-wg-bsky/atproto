@@ -588,6 +588,9 @@ importers:
       '@atproto/identity':
         specifier: workspace:^
         version: link:../identity
+      '@atproto/lexicon':
+        specifier: workspace:^
+        version: link:../lexicon
       '@atproto/repo':
         specifier: workspace:^
         version: link:../repo
