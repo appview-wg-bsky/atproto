@@ -2,7 +2,10 @@ import { availableParallelism } from 'node:os'
 import { SHARE_ENV } from 'node:worker_threads'
 import { type RedisClientOptions, createClient } from '@redis/client'
 import { type Event, Firehose } from '@skyware/firehose'
-import PQueue from 'p-queue/dist/index.js' // https://github.com/sindresorhus/p-queue/issues/145
+import _PQueue from 'p-queue'
+// @ts-expect-error — https://github.com/sindresorhus/p-queue/issues/145
+const PQueue = _PQueue.default
+type PQueue = _PQueue
 import { FixedQueue, Piscina } from 'piscina'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
 import type { IdentityResolverOpts } from '@atproto/identity'
@@ -69,7 +72,7 @@ export class FirehoseSubscription {
   }
 
   async start() {
-    await this.redis.connect()
+    if (!this.redis.isOpen) await this.redis.connect()
 
     const initialCursor = await this.redis.get(REDIS_SEQ_KEY)
 
