@@ -152,7 +152,9 @@ export class FirehoseSubscription {
       })
   }
 
-  protected processMessage(message: Event): ReturnType<typeof worker> {
+  protected processMessage(
+    message: Event,
+  ): ReturnType<ReturnType<typeof worker>> {
     return this.piscina.run(message, {
       transferList: 'blocks' in message ? [message.blocks.buffer] : [],
     })

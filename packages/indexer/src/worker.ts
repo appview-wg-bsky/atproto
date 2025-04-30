@@ -19,64 +19,66 @@ if (!workerData) {
   throw new Error('Must be run as a worker')
 }
 
-const { dbOptions, idResolverOptions } =
-  workerData as FirehoseSubscriptionOptions
-if (!dbOptions || !idResolverOptions) {
-  throw new Error('worker missing options')
-}
+export default function () {
+  const { dbOptions, idResolverOptions } =
+    workerData as FirehoseSubscriptionOptions
+  if (!dbOptions || !idResolverOptions) {
+    throw new Error('worker missing options')
+  }
 
-const db = new Database(dbOptions)
+  const db = new Database(dbOptions)
 
-const idResolver = new IdResolver({
-  ...idResolverOptions,
-  didCache: new MemoryCache(),
-})
-const background = new BackgroundQueue(db)
-const indexingSvc = new IndexingService(db, idResolver, background)
+  const idResolver = new IdResolver({
+    ...idResolverOptions,
+    didCache: new MemoryCache(),
+  })
+  const background = new BackgroundQueue(db)
+  const indexingSvc = new IndexingService(db, idResolver, background)
 
-export default async function handleMessage(
-  msg: CommitEvent | AccountEvent | IdentityEvent | SyncEvent,
-) {
-  try {
-    if (msg.$type === 'com.atproto.sync.subscribeRepos#identity') {
-      await indexingSvc.indexHandle(msg.did, msg.time, true)
-    } else if (msg.$type === 'com.atproto.sync.subscribeRepos#account') {
-      if (msg.active === false && msg.status === 'deleted') {
-        await indexingSvc.deleteActor(msg.did)
-      } else {
-        await indexingSvc.updateActorStatus(msg.did, msg.active, msg.status)
-      }
-    } else if (msg.$type === 'com.atproto.sync.subscribeRepos#sync') {
-      const cid = parseCid(readCar(msg.blocks).header.data.roots[0])
-      await Promise.all([
-        indexingSvc.setCommitLastSeen(msg.did, cid, msg.rev),
-        indexingSvc.indexHandle(msg.did, msg.time),
-      ])
-    } else if (msg.$type === 'com.atproto.sync.subscribeRepos#commit') {
-      for (const op of msg.ops) {
-        const uri = AtUri.make(msg.repo, ...op.path.split('/'))
-        const indexFn =
-          op.action === 'delete'
-            ? indexingSvc.deleteRecord(uri)
-            : indexingSvc.indexRecord(
-                uri,
-                op.cid,
-                jsonToLex(op.record),
-                op.action === 'create'
-                  ? WriteOpAction.Create
-                  : WriteOpAction.Update,
-                msg.time,
-              )
-        background.add(() => indexingSvc.indexHandle(msg.repo, msg.time))
+  return async (
+    msg: CommitEvent | AccountEvent | IdentityEvent | SyncEvent,
+  ) => {
+    try {
+      if (msg.$type === 'com.atproto.sync.subscribeRepos#identity') {
+        await indexingSvc.indexHandle(msg.did, msg.time, true)
+      } else if (msg.$type === 'com.atproto.sync.subscribeRepos#account') {
+        if (msg.active === false && msg.status === 'deleted') {
+          await indexingSvc.deleteActor(msg.did)
+        } else {
+          await indexingSvc.updateActorStatus(msg.did, msg.active, msg.status)
+        }
+      } else if (msg.$type === 'com.atproto.sync.subscribeRepos#sync') {
+        const cid = parseCid(readCar(msg.blocks).header.data.roots[0])
         await Promise.all([
-          indexFn,
-          indexingSvc.setCommitLastSeen(msg.repo, msg.commit, msg.rev),
+          indexingSvc.setCommitLastSeen(msg.did, cid, msg.rev),
+          indexingSvc.indexHandle(msg.did, msg.time),
         ])
+      } else if (msg.$type === 'com.atproto.sync.subscribeRepos#commit') {
+        for (const op of msg.ops) {
+          const uri = AtUri.make(msg.repo, ...op.path.split('/'))
+          const indexFn =
+            op.action === 'delete'
+              ? indexingSvc.deleteRecord(uri)
+              : indexingSvc.indexRecord(
+                  uri,
+                  op.cid,
+                  jsonToLex(op.record),
+                  op.action === 'create'
+                    ? WriteOpAction.Create
+                    : WriteOpAction.Update,
+                  msg.time,
+                )
+          background.add(() => indexingSvc.indexHandle(msg.repo, msg.time))
+          await Promise.all([
+            indexFn,
+            indexingSvc.setCommitLastSeen(msg.repo, msg.commit, msg.rev),
+          ])
+        }
       }
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err }
     }
-    return { success: true }
-  } catch (err) {
-    return { success: false, error: err }
   }
 }
 
