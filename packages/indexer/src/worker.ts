@@ -10,7 +10,7 @@ import { CID } from 'multiformats/cid'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing/index.js'
 import { IdResolver, MemoryCache } from '@atproto/identity'
-import { jsonToLex } from '@atproto/lexicon'
+import { BlobRef } from '@atproto/lexicon'
 import { WriteOpAction } from '@atproto/repo'
 import { AtUri } from '@atproto/syntax'
 import type { FirehoseSubscriptionOptions } from './subscription.js'
@@ -93,4 +93,55 @@ function parseCid(
     return CID.decode(cid.bytes)
   }
   throw new Error('Invalid CID ' + JSON.stringify(cid))
+}
+
+function jsonToLex(val: Record<string, unknown>): unknown {
+  try {
+    // walk arrays
+    if (Array.isArray(val)) {
+      return val.map((item) => jsonToLex(item))
+    }
+    // objects
+    if (val && typeof val === 'object') {
+      // check for dag json values
+      if (
+        '$link' in val &&
+        typeof val['$link'] === 'string' &&
+        Object.keys(val).length === 1
+      ) {
+        return CID.parse(val['$link'])
+      }
+      if ('bytes' in val && val['bytes'] instanceof Uint8Array) {
+        return CID.decode(val.bytes)
+      }
+      if (
+        val['$type'] === 'blob' ||
+        (typeof val['cid'] === 'string' && typeof val['mimeType'] === 'string')
+      ) {
+        if ('ref' in val && typeof val['size'] === 'number') {
+          return new BlobRef(
+            CID.decode((val.ref as any).bytes),
+            val.mimeType as string,
+            val.size,
+          )
+        } else {
+          return new BlobRef(
+            CID.parse(val.cid as string),
+            val.mimeType as string,
+            -1,
+            val as never,
+          )
+        }
+      }
+      // walk plain objects
+      const toReturn: Record<string, unknown> = {}
+      for (const key of Object.keys(val)) {
+        // @ts-expect-error
+        toReturn[key] = jsonToLex(val[key])
+      }
+      return toReturn
+    }
+  } catch {}
+  // pass through
+  return val
 }

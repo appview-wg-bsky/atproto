@@ -140,11 +140,11 @@ export class FirehoseSubscription {
         priority: Number.MAX_SAFE_INTEGER - seq,
       })
       .then((res) => {
-        if (res.success) {
+        if (res?.success) {
           if (queue.size === 0) this.queues.delete(did)
           messagesProcessed++
         } else {
-          if (res.error) {
+          if (res?.error) {
             console.warn(new FirehoseWorkerError(res.error))
           }
           return this.queueMessage(message, attempt + 1)
