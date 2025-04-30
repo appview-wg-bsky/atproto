@@ -38,6 +38,7 @@ export default function () {
   return async (
     msg: CommitEvent | AccountEvent | IdentityEvent | SyncEvent,
   ) => {
+    if (!msg) return { success: true }
     try {
       if (msg.$type === 'com.atproto.sync.subscribeRepos#identity') {
         await indexingSvc.indexHandle(msg.did, msg.time, true)

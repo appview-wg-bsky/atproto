@@ -33,7 +33,7 @@ const main = async () => {
     verbose: env.verbose,
   })
 
-  void sub.start()
+  void sub.start().catch(console.error)
 
   process.on('SIGTERM', sub.destroy)
   process.on('disconnect', sub.destroy)
@@ -58,4 +58,4 @@ const getEnv = () => ({
   verbose: process.env.LOG_VERBOSE === 'true',
 })
 
-void main()
+void main().catch(console.error)
