@@ -134,7 +134,7 @@ export class FirehoseSubscription {
       this.queues.set(did, queue)
     }
 
-    // higher seq -> lower priority
+    // higher seq → lower priority
     queue
       .add(() => this.processMessage(message), {
         priority: Number.MAX_SAFE_INTEGER - seq,
@@ -152,9 +152,7 @@ export class FirehoseSubscription {
       })
   }
 
-  protected processMessage(
-    message: Event,
-  ): ReturnType<ReturnType<typeof worker>> {
+  protected processMessage(message: Event): ReturnType<typeof worker> {
     return this.piscina.run(message, {
       transferList: 'blocks' in message ? [message.blocks.buffer] : [],
     })
