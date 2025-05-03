@@ -114,7 +114,7 @@ export class FirehoseSubscription {
     try {
       for await (const c of this.firehose) {
         messagesReceived++
-        const chunk = new Uint8Array(c.buffer)
+        const chunk = new Uint8Array(c)
         this.chunkQueue.add(() => this.processChunk(chunk))
       }
     } catch (err) {
