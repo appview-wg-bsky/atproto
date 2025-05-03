@@ -114,6 +114,12 @@ export class FirehoseSubscription {
       )
       messagesReceived = messagesProcessed = 0
     }, 10_000)
+
+    if (this.opts.redisOptions) {
+      setInterval(async () => {
+        await this.redis.set(REDIS_SEQ_KEY, this.firehose.cursor)
+      }, 60_000)
+    }
   }
 
   protected queueMessage(message: Event, attempt = 0) {
