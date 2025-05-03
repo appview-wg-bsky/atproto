@@ -1,4 +1,3 @@
-import { setTimeout } from 'node:timers/promises'
 import { workerData } from 'node:worker_threads'
 import { readCar } from '@atcute/car'
 import type {
@@ -35,51 +34,45 @@ const idResolver = new IdResolver({
 const background = new BackgroundQueue(db)
 const indexingSvc = new IndexingService(db, idResolver, background)
 
-export default async (
+const worker = async (
   msg: CommitEvent | AccountEvent | IdentityEvent | SyncEvent,
 ) => {
   if (!msg) return { success: true }
   try {
     if (msg.$type === 'com.atproto.sync.subscribeRepos#identity') {
-      // await indexingSvc.indexHandle(msg.did, msg.time, true)
+      await indexingSvc.indexHandle(msg.did, msg.time, true)
     } else if (msg.$type === 'com.atproto.sync.subscribeRepos#account') {
-      // if (msg.active === false && msg.status === 'deleted') {
-      //   await indexingSvc.deleteActor(msg.did)
-      // } else {
-      //   await indexingSvc.updateActorStatus(msg.did, msg.active, msg.status)
-      // }
+      if (msg.active === false && msg.status === 'deleted') {
+        await indexingSvc.deleteActor(msg.did)
+      } else {
+        await indexingSvc.updateActorStatus(msg.did, msg.active, msg.status)
+      }
     } else if (msg.$type === 'com.atproto.sync.subscribeRepos#sync') {
-      // const cid = parseCid(readCar(msg.blocks).header.data.roots[0])
-      // await Promise.all([
-      //   indexingSvc.setCommitLastSeen(msg.did, cid, msg.rev),
-      //   indexingSvc.indexHandle(msg.did, msg.time),
-      // ])
+      const cid = parseCid(readCar(msg.blocks).header.data.roots[0])
+      await Promise.all([
+        indexingSvc.setCommitLastSeen(msg.did, cid, msg.rev),
+        indexingSvc.indexHandle(msg.did, msg.time),
+      ])
     } else if (msg.$type === 'com.atproto.sync.subscribeRepos#commit') {
       for (const op of msg.ops) {
         const uri = AtUri.make(msg.repo, ...op.path.split('/'))
-        if (op.action !== 'delete')
-          // @ts-expect-error
-          indexingSvc
-            .findIndexerForCollection(uri.collection)
-            ?.assertValidRecord(jsonToLex(op.record))
-
-        // const indexFn =
-        //   op.action === 'delete'
-        //     ? indexingSvc.deleteRecord(uri)
-        //     : indexingSvc.indexRecord(
-        //         uri,
-        //         op.cid,
-        //         jsonToLex(op.record),
-        //         op.action === 'create'
-        //           ? WriteOpAction.Create
-        //           : WriteOpAction.Update,
-        //         msg.time,
-        //       )
-        // background.add(() => indexingSvc.indexHandle(msg.repo, msg.time))
-        // await Promise.all([
-        //   indexFn,
-        //   indexingSvc.setCommitLastSeen(msg.repo, msg.commit, msg.rev),
-        // ])
+        const indexFn =
+          op.action === 'delete'
+            ? indexingSvc.deleteRecord(uri)
+            : indexingSvc.indexRecord(
+                uri,
+                op.cid,
+                jsonToLex(op.record),
+                op.action === 'create'
+                  ? WriteOpAction.Create
+                  : WriteOpAction.Update,
+                msg.time,
+              )
+        background.add(() => indexingSvc.indexHandle(msg.repo, msg.time))
+        await Promise.all([
+          indexFn,
+          indexingSvc.setCommitLastSeen(msg.repo, msg.commit, msg.rev),
+        ])
       }
     }
     return { success: true }
@@ -149,7 +142,10 @@ function jsonToLex(val: Record<string, unknown>): unknown {
       }
       return toReturn
     }
-  } catch {}
-  // pass through
+  } catch {
+    // pass through
+  }
   return val
 }
+
+export default worker
