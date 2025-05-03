@@ -27,7 +27,6 @@ declare module 'piscina' {
 }
 
 let messagesReceived = 0,
-  messagesParsed = 0,
   messagesProcessed = 0
 
 export class FirehoseSubscription {
@@ -100,9 +99,9 @@ export class FirehoseSubscription {
     if (!this.logStatsInterval)
       this.logStatsInterval = setInterval(() => {
         console.log(
-          `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesParsed / 10)} / ${Math.round(messagesReceived / 10)} per sec (${Math.round((messagesProcessed / messagesReceived) * 100)}%) [${this.piscina.threads.length}]`,
+          `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesReceived / 10)} per sec (${Math.round((messagesProcessed / messagesReceived) * 100)}%) [${this.piscina.threads.length}]`,
         )
-        messagesReceived = messagesParsed = messagesProcessed = 0
+        messagesReceived = messagesProcessed = 0
       }, 10_000)
 
     if (this.opts.redisOptions && !this.saveCursorInterval) {
@@ -234,8 +233,6 @@ export class FirehoseSubscription {
   }
 
   protected queueMessage(message: Event, attempt = 0) {
-    messagesParsed++
-
     const { did, seq } = didAndSeq(message)
 
     if (attempt > this.MAX_ATTEMPTS) {
@@ -300,7 +297,10 @@ export class FirehoseSubscription {
 
   protected processMessage(message: Event): ReturnType<typeof worker> {
     return this.piscina.run(message, {
-      transferList: 'blocks' in message ? [message.blocks.buffer] : [],
+      transferList:
+        'blocks' in message && message.blocks instanceof Uint8Array
+          ? [message.blocks.buffer]
+          : [],
     })
   }
 
