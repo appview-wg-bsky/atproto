@@ -1,7 +1,10 @@
 import { availableParallelism } from 'node:os'
 import { SHARE_ENV } from 'node:worker_threads'
+import { readCar } from '@atcute/car'
+import { decode, decodeFirst, fromBytes, toCidLink } from '@atcute/cbor'
+import type { ComAtprotoSyncSubscribeRepos } from '@atcute/client/lexicons'
 import { type RedisClientOptions, createClient } from '@redis/client'
-import { type Event, Firehose } from '@skyware/firehose'
+import type { Event, RepoOp } from '@skyware/firehose'
 import _PQueue from 'p-queue'
 // @ts-expect-error — https://github.com/sindresorhus/p-queue/issues/145
 const PQueue = _PQueue.default
@@ -9,6 +12,7 @@ type PQueue = _PQueue
 import { FixedQueue, Piscina } from 'piscina'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
 import type { IdentityResolverOpts } from '@atproto/identity'
+import { WebSocketKeepAlive } from '@atproto/xrpc-server'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors.js'
 import type { default as worker } from './worker.js'
 
@@ -22,18 +26,22 @@ declare module 'piscina' {
   }
 }
 
-const REDIS_SEQ_KEY = 'bsky_indexer:seq'
-const WORKER_PATH = new URL('./worker.js', import.meta.url).href
-const MAX_ATTEMPTS = 5
-
 let messagesReceived = 0,
   messagesProcessed = 0
 
 export class FirehoseSubscription {
-  protected firehose: Firehose
+  private REDIS_SEQ_KEY = 'bsky_indexer:seq'
+  private WORKER_PATH = new URL('./worker.js', import.meta.url).href
+  private MAX_ATTEMPTS = 5
+
+  protected firehose!: WebSocketKeepAlive
   protected piscina: Piscina
   protected redis?: ReturnType<typeof createClient>
-  protected queues = new Map<string, PQueue>()
+  protected chunkQueue = new PQueue()
+  protected didQueues = new Map<string, PQueue>()
+
+  protected logStatsInterval: NodeJS.Timer | null = null
+  protected saveCursorInterval: NodeJS.Timer | null = null
 
   protected settings = {
     minWorkers: 16,
@@ -47,15 +55,10 @@ export class FirehoseSubscription {
     if (this.opts.maxConcurrency)
       this.settings.maxConcurrency = this.opts.maxConcurrency
 
-    this.firehose = new Firehose({
-      relay: this.opts.service,
-      cursor: this.opts.cursor?.toString(),
-    })
-
     const { dbOptions, idResolverOptions } = this.opts
 
     this.piscina = new Piscina({
-      filename: WORKER_PATH,
+      filename: this.WORKER_PATH,
       env: SHARE_ENV,
       minThreads: this.settings.minWorkers,
       maxThreads: this.settings.maxWorkers,
@@ -72,53 +75,158 @@ export class FirehoseSubscription {
       this.redis = createClient(this.opts.redisOptions)
   }
 
-  async start() {
+  async start(): Promise<void> {
     if (this.opts.redisOptions && !this.redis.isOpen) await this.redis.connect()
 
     const initialCursor = this.opts.redisOptions
-      ? await this.redis.get(REDIS_SEQ_KEY)
+      ? await this.redis.get(this.REDIS_SEQ_KEY)
       : null
 
-    if (initialCursor)
+    let cursor = ''
+    if (initialCursor) {
       console.log(`starting from initial cursor: ${initialCursor}`)
-    else if (this.opts.cursor)
+      cursor = initialCursor
+    } else if (this.opts.cursor) {
       console.log(`starting from cursor: ${this.opts.cursor}`)
-    else console.log(`starting from latest`)
+      cursor = this.opts.cursor.toString()
+    } else console.log(`starting from latest`)
 
-    this.firehose = new Firehose({
-      relay: this.opts.service,
-      cursor: initialCursor ?? this.opts.cursor?.toString(),
+    this.firehose = new WebSocketKeepAlive({
+      getUrl: async () =>
+        `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos?cursor=${cursor}`,
     })
 
-    this.firehose.on('commit', this.queueMessage.bind(this))
-    this.firehose.on('account', this.queueMessage.bind(this))
-    this.firehose.on('identity', this.queueMessage.bind(this))
-    this.firehose.on('sync', this.queueMessage.bind(this))
-    this.firehose.on('info', (info) => {
-      console.info(`[FIREHOSE] ${info}`)
-    })
-    this.firehose.on('error', (err) => {
-      this.opts.onError?.(new FirehoseSubscriptionError(err))
-      this.firehose?.close()
-      return this.start()
-    })
-    this.firehose.on('close', () => {
-      console.log('firehose closed, exiting...')
-    })
+    if (!this.logStatsInterval)
+      this.logStatsInterval = setInterval(() => {
+        console.log(
+          `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesReceived / 10)} per sec (${Math.round((messagesProcessed / messagesReceived) * 100)}%) [${this.piscina.threads.length}]`,
+        )
+        messagesReceived = messagesProcessed = 0
+      }, 10_000)
 
-    this.firehose.start()
-
-    setInterval(() => {
-      console.log(
-        `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesReceived / 10)} per sec (${Math.round((messagesProcessed / messagesReceived) * 100)}%) [${this.piscina.threads.length}]`,
-      )
-      messagesReceived = messagesProcessed = 0
-    }, 10_000)
-
-    if (this.opts.redisOptions) {
-      setInterval(async () => {
-        await this.redis.set(REDIS_SEQ_KEY, this.firehose.cursor)
+    if (this.opts.redisOptions && !this.saveCursorInterval) {
+      this.saveCursorInterval = setInterval(async () => {
+        await this.redis.set(this.REDIS_SEQ_KEY, cursor)
       }, 60_000)
+    }
+
+    try {
+      for await (const chunk of this.firehose) {
+        this.chunkQueue.add(() => this.processChunk(chunk))
+      }
+    } catch (err) {
+      this.opts.onError?.(new FirehoseSubscriptionError(err))
+      return this.start()
+    }
+  }
+
+  protected processChunk(chunk: Uint8Array) {
+    try {
+      const [header, remainder] = decodeFirst(chunk)
+      const [body, remainder2] = decodeFirst(remainder)
+      if (remainder2.length > 0) {
+        throw new Error('excess bytes in message')
+      }
+
+      const { t, op } = this.parseHeader(header)
+
+      if (op === -1) {
+        throw new Error(`error: ${body.message}\nerror code: ${body.error}`)
+      }
+
+      if (t === '#commit') {
+        const {
+          seq,
+          repo,
+          commit,
+          rev,
+          since,
+          blocks: blocksBytes,
+          ops: commitOps,
+          prevData,
+          time,
+        } = body as ComAtprotoSyncSubscribeRepos.Commit
+
+        if (!blocksBytes?.$bytes?.length) return
+
+        const blocks = fromBytes(blocksBytes)
+        const car = this.readCar(blocks)
+
+        const ops: Array<RepoOp> = []
+        for (const op of commitOps) {
+          const action: 'create' | 'update' | 'delete' = op.action as any
+          if (action === 'create') {
+            if (!op.cid) continue
+            const record = car.get(op.cid.$link)
+            if (!record) continue
+            ops.push({
+              action,
+              path: op.path,
+              cid: op.cid.$link,
+              record,
+            })
+          } else if (action === 'update') {
+            if (!op.cid) continue
+            const record = car.get(op.cid.$link)
+            if (!record) continue
+            ops.push({
+              action,
+              path: op.path,
+              cid: op.cid.$link,
+              ...(op.prev ? { prev: op.prev.$link } : {}),
+              record,
+            })
+          } else if (action === 'delete') {
+            ops.push({
+              action,
+              path: op.path,
+              ...(op.prev ? { prev: op.prev.$link } : {}),
+            })
+          } else {
+            throw new Error(`Unknown action: ${action}`)
+          }
+        }
+
+        this.queueMessage({
+          $type: 'com.atproto.sync.subscribeRepos#commit',
+          seq,
+          repo,
+          commit: commit.$link,
+          rev,
+          since,
+          blocks,
+          ops,
+          ...(prevData ? { prevData: prevData.$link } : {}),
+          time,
+        })
+      } else if (t === '#sync') {
+        const {
+          seq,
+          did,
+          blocks: blocksBytes,
+          rev,
+          time,
+        } = body as ComAtprotoSyncSubscribeRepos.Sync
+
+        const blocks = blocksBytes?.$bytes?.length
+          ? fromBytes(blocksBytes)
+          : new Uint8Array()
+        this.queueMessage({
+          $type: 'com.atproto.sync.subscribeRepos#sync',
+          seq,
+          did,
+          blocks,
+          rev,
+          time,
+        })
+      }
+
+      this.queueMessage({
+        $type: `com.atproto.sync.subscribeRepos${t}`,
+        ...body,
+      })
+    } catch (err) {
+      this.opts.onError?.(new FirehoseSubscriptionError(err))
     }
   }
 
@@ -127,16 +235,16 @@ export class FirehoseSubscription {
 
     const { did, seq } = didAndSeq(message)
 
-    if (attempt > MAX_ATTEMPTS) {
+    if (attempt > this.MAX_ATTEMPTS) {
       console.error(`max attempts reached for ${did} ${seq}`)
       return
     }
 
     // Ensure messages for a given did are processed sequentially
-    let queue = this.queues.get(did)
+    let queue = this.didQueues.get(did)
     if (!queue) {
       queue = new PQueue({ concurrency: 1, timeout: 120_000 })
-      this.queues.set(did, queue)
+      this.didQueues.set(did, queue)
     }
 
     // higher seq → lower priority
@@ -146,7 +254,7 @@ export class FirehoseSubscription {
       })
       .then((res) => {
         if (res?.success) {
-          if (queue.size === 0) this.queues.delete(did)
+          if (queue.size === 0) this.didQueues.delete(did)
           messagesProcessed++
         } else {
           if (res?.error) {
@@ -165,6 +273,28 @@ export class FirehoseSubscription {
       })
   }
 
+  protected parseHeader(header: any): { t: string; op: 1 | -1 } {
+    if (
+      !header ||
+      typeof header !== 'object' ||
+      !header.t ||
+      typeof header.t !== 'string' ||
+      !header.op ||
+      typeof header.op !== 'number'
+    ) {
+      throw new Error('invalid header received')
+    }
+    return { t: header.t, op: header.op }
+  }
+
+  protected readCar(buffer: Uint8Array): Map<string, unknown> {
+    const records = new Map<string, unknown>()
+    for (const { cid, bytes } of readCar(buffer).iterate()) {
+      records.set(toCidLink(cid).$link, decode(bytes))
+    }
+    return records
+  }
+
   protected processMessage(message: Event): ReturnType<typeof worker> {
     return this.piscina.run(message, {
       transferList: 'blocks' in message ? [message.blocks.buffer] : [],
@@ -172,7 +302,6 @@ export class FirehoseSubscription {
   }
 
   async destroy() {
-    if (this?.firehose?.ws?.readyState < 2) this?.firehose?.close()
     await this?.piscina?.close({ force: true })
     await this?.redis?.quit()
   }

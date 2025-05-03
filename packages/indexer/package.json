@@ -21,19 +21,21 @@
   },
   "dependencies": {
     "@atcute/car": "^3.0.3",
+    "@atcute/cbor": "^2.2.2",
     "@atproto/bsky": "workspace:^",
     "@atproto/identity": "workspace:^",
     "@atproto/lexicon": "workspace:^",
     "@atproto/repo": "workspace:^",
     "@atproto/syntax": "workspace:^",
+    "@atproto/xrpc-server": "workspace:^",
     "@redis/client": "^1.6.0",
-    "@skyware/firehose": "^0.5.1",
     "multiformats": "^13.3.2",
     "p-queue": "^6.6.2",
     "piscina": "^5.0.0-alpha.2"
   },
   "devDependencies": {
-    "@atproto/api": "workspace:^",
+    "@atcute/client": "^3.0.1",
+    "@skyware/firehose": "^0.5.1",
     "typescript": "^5.8.3"
   }
 }
