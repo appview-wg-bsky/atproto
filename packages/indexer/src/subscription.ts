@@ -123,7 +123,7 @@ export class FirehoseSubscription {
     const { did, seq } = didAndSeq(message)
 
     if (attempt > MAX_ATTEMPTS) {
-      console.error(`max attempts reached for ${did} ${seq}`, message)
+      console.error(`max attempts reached for ${did} ${seq}`)
       return
     }
 
@@ -150,6 +150,10 @@ export class FirehoseSubscription {
           return this.queueMessage(message, attempt + 1)
         }
       })
+      .catch((err) => {
+        console.error(`uncaught error on ${did} ${seq}`)
+        this.opts.onError?.(new FirehoseWorkerError(err))
+      })
   }
 
   protected processMessage(message: Event): ReturnType<typeof worker> {
@@ -159,9 +163,9 @@ export class FirehoseSubscription {
   }
 
   async destroy() {
-    this.firehose?.close()
-    await this.piscina.close({ force: true })
-    await this.redis.quit()
+    this?.firehose?.close()
+    await this?.piscina?.close({ force: true })
+    await this?.redis?.quit()
   }
 }
 
