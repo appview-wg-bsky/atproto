@@ -151,7 +151,11 @@ export class FirehoseSubscription {
       })
       .catch((err) => {
         console.error(`uncaught error on ${did} ${seq}`)
-        this.opts.onError?.(new FirehoseWorkerError(err))
+        if (err instanceof DOMException && err.name === 'DataCloneError') {
+          console.error(`${err.message}\n${message}`)
+        } else {
+          this.opts.onError?.(new FirehoseWorkerError(err))
+        }
       })
   }
 
