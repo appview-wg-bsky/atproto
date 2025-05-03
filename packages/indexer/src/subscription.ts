@@ -104,7 +104,6 @@ export class FirehoseSubscription {
     })
     this.firehose.on('close', () => {
       console.log('firehose closed, exiting...')
-      this.destroy()
     })
 
     this.firehose.start()
@@ -163,7 +162,7 @@ export class FirehoseSubscription {
   }
 
   async destroy() {
-    this?.firehose?.close()
+    if (this?.firehose?.ws?.readyState < 2) this?.firehose?.close()
     await this?.piscina?.close({ force: true })
     await this?.redis?.quit()
   }
