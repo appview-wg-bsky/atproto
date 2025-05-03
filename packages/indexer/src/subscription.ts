@@ -45,7 +45,7 @@ export class FirehoseSubscription {
   protected saveCursorInterval: NodeJS.Timer | null = null
 
   protected settings = {
-    minWorkers: 16,
+    minWorkers: availableParallelism(),
     maxWorkers: availableParallelism() * 4,
     maxConcurrency: 50,
   }
@@ -61,8 +61,8 @@ export class FirehoseSubscription {
     this.piscina = new Piscina({
       filename: this.WORKER_PATH,
       env: SHARE_ENV,
-      minThreads: this.settings.minWorkers,
-      maxThreads: this.settings.maxWorkers,
+      minThreads: Math.max(16, this.settings.minWorkers),
+      maxThreads: Math.min(this.settings.maxWorkers, 72),
       concurrentTasksPerWorker: this.settings.maxConcurrency,
       idleTimeout: 30_000,
       taskQueue: new FixedQueue(),
@@ -305,6 +305,7 @@ export class FirehoseSubscription {
   }
 
   async destroy() {
+    console.warn('destroying indexer')
     await this?.piscina?.close({ force: true })
     await this?.redis?.quit()
   }
