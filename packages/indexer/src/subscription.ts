@@ -222,12 +222,12 @@ export class FirehoseSubscription {
           rev,
           time,
         })
+      } else {
+        this.queueMessage({
+          $type: `com.atproto.sync.subscribeRepos${t}`,
+          ...body,
+        })
       }
-
-      this.queueMessage({
-        $type: `com.atproto.sync.subscribeRepos${t}`,
-        ...body,
-      })
     } catch (err) {
       this.opts.onError?.(new FirehoseSubscriptionError(err))
     }
