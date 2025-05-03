@@ -27,6 +27,7 @@ declare module 'piscina' {
 }
 
 let messagesReceived = 0,
+  messagesParsed = 0,
   messagesProcessed = 0
 
 export class FirehoseSubscription {
@@ -99,9 +100,9 @@ export class FirehoseSubscription {
     if (!this.logStatsInterval)
       this.logStatsInterval = setInterval(() => {
         console.log(
-          `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesReceived / 10)} per sec (${Math.round((messagesProcessed / messagesReceived) * 100)}%) [${this.piscina.threads.length}]`,
+          `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesParsed / 10)} / ${Math.round(messagesReceived / 10)} per sec (${Math.round((messagesProcessed / messagesReceived) * 100)}%) [${this.piscina.threads.length}]`,
         )
-        messagesReceived = messagesProcessed = 0
+        messagesReceived = messagesParsed = messagesProcessed = 0
       }, 10_000)
 
     if (this.opts.redisOptions && !this.saveCursorInterval) {
@@ -112,7 +113,8 @@ export class FirehoseSubscription {
 
     try {
       for await (const c of this.firehose) {
-        const chunk = new Uint8Array(c.buffer.slice(0, c.byteLength))
+        messagesReceived++
+        const chunk = new Uint8Array(c.buffer)
         this.chunkQueue.add(() => this.processChunk(chunk))
       }
     } catch (err) {
@@ -232,7 +234,7 @@ export class FirehoseSubscription {
   }
 
   protected queueMessage(message: Event, attempt = 0) {
-    messagesReceived++
+    messagesParsed++
 
     const { did, seq } = didAndSeq(message)
 
@@ -267,7 +269,7 @@ export class FirehoseSubscription {
       .catch((err) => {
         console.error(`uncaught error on ${did} ${seq}`)
         if (err instanceof DOMException && err.name === 'DataCloneError') {
-          console.error(`${err.message}\n${message}`)
+          console.error(`${err.message}\n${JSON.stringify(message)}`)
         } else {
           this.opts.onError?.(new FirehoseWorkerError(err))
         }
