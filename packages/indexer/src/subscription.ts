@@ -1,4 +1,5 @@
 import { availableParallelism } from 'node:os'
+import { setTimeout } from 'node:timers/promises'
 import { SHARE_ENV } from 'node:worker_threads'
 import { readCar } from '@atcute/car'
 import { decode, decodeFirst, fromBytes, toCidLink } from '@atcute/cbor'
@@ -61,9 +62,9 @@ export class FirehoseSubscription {
       filename: this.WORKER_PATH,
       env: SHARE_ENV,
       minThreads: Math.max(16, this.settings.minWorkers),
-      maxThreads: Math.min(this.settings.maxWorkers, 72),
+      maxThreads: Math.min(this.settings.maxWorkers, 96),
       concurrentTasksPerWorker: this.settings.maxConcurrency,
-      idleTimeout: 30_000,
+      idleTimeout: Infinity,
       taskQueue: new FixedQueue(),
       workerData: {
         dbOptions,
@@ -111,6 +112,8 @@ export class FirehoseSubscription {
     }
 
     try {
+      await setTimeout(10_000)
+
       for await (const c of this.firehose) {
         messagesReceived++
         const chunk = new Uint8Array(c)
