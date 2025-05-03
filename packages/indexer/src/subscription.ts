@@ -6,26 +6,13 @@ import { decode, decodeFirst, fromBytes, toCidLink } from '@atcute/cbor'
 import type { ComAtprotoSyncSubscribeRepos } from '@atcute/client/lexicons'
 import { type RedisClientOptions, createClient } from '@redis/client'
 import type { Event, RepoOp } from '@skyware/firehose'
-import _PQueue from 'p-queue'
-// @ts-expect-error — https://github.com/sindresorhus/p-queue/issues/145
-const PQueue = _PQueue.default
-type PQueue = _PQueue
+import pLimit, { type LimitFunction } from 'p-limit'
 import { FixedQueue, Piscina } from 'piscina'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
 import type { IdentityResolverOpts } from '@atproto/identity'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors.js'
 import type { default as worker } from './worker.js'
-
-declare module 'piscina' {
-  interface PiscinaTask {
-    [Piscina.queueOptionsSymbol]: {
-      did: string
-      seq: number
-      attempt?: number
-    }
-  }
-}
 
 let messagesReceived = 0,
   messagesProcessed = 0
@@ -38,8 +25,7 @@ export class FirehoseSubscription {
   protected firehose!: WebSocketKeepAlive
   protected piscina: Piscina
   protected redis?: ReturnType<typeof createClient>
-  protected chunkQueue = new PQueue()
-  protected didQueues = new Map<string, PQueue>()
+  protected didQueues = new Map<string, LimitFunction>()
 
   protected logStatsInterval: NodeJS.Timer | null = null
   protected saveCursorInterval: NodeJS.Timer | null = null
@@ -117,7 +103,7 @@ export class FirehoseSubscription {
       for await (const c of this.firehose) {
         messagesReceived++
         const chunk = new Uint8Array(c)
-        this.chunkQueue.add(() => this.processChunk(chunk))
+        void this.processChunk(chunk)
       }
     } catch (err) {
       this.opts.onError?.(new FirehoseSubscriptionError(err))
@@ -244,20 +230,17 @@ export class FirehoseSubscription {
     }
 
     // Ensure messages for a given did are processed sequentially
-    let queue = this.didQueues.get(did)
-    if (!queue) {
-      queue = new PQueue({ concurrency: 1, timeout: 120_000 })
-      this.didQueues.set(did, queue)
+    let limit = this.didQueues.get(did)
+    if (!limit) {
+      limit = pLimit(1)
+      this.didQueues.set(did, limit)
     }
 
-    // higher seq → lower priority
-    queue
-      .add(() => this.processMessage(message), {
-        priority: Number.MAX_SAFE_INTEGER - seq,
-      })
+    void limit(this.processMessage, message)
       .then((res) => {
         if (res?.success) {
-          if (queue.size === 0) this.didQueues.delete(did)
+          if (limit.activeCount === 0 && limit.pendingCount === 0)
+            this.didQueues.delete(did)
           messagesProcessed++
         } else {
           if (res?.error) {
@@ -298,7 +281,7 @@ export class FirehoseSubscription {
     return records
   }
 
-  protected processMessage(message: Event): ReturnType<typeof worker> {
+  protected processMessage = (message: Event): ReturnType<typeof worker> => {
     return this.piscina.run(message, {
       transferList:
         'blocks' in message && message.blocks instanceof Uint8Array
