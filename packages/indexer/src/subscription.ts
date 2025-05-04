@@ -59,6 +59,7 @@ export class FirehoseSubscription {
         didLockMap,
       },
     })
+    this.piscina.on('message', this.onProcessed)
 
     if (this.opts.redisOptions)
       this.redis = createClient(this.opts.redisOptions)
@@ -103,10 +104,10 @@ export class FirehoseSubscription {
 
       for await (const c of this.firehose) {
         messagesReceived++
-        // unsure why this is necessary, but the chunk ArrayBuffer otherwise sometimes
-        // ends up detached by the time it gets to the worker
+        // unsure why this is necessary, but the chunk ArrayBuffer
+        // otherwise sometimes ends up detached
         const chunk = new Uint8Array(c)
-        void this.processChunk(chunk)
+        void this.piscina.run(Piscina.move(chunk))
       }
     } catch (err) {
       this.opts.onError?.(new FirehoseSubscriptionError(err))
@@ -114,22 +115,15 @@ export class FirehoseSubscription {
     }
   }
 
-  protected processChunk = (chunk: Uint8Array) => {
-    void this.piscina
-      .run(Piscina.move(chunk))
-      .then((res) => {
-        if (res?.success) {
-          messagesProcessed++
-        } else if (res?.error) {
-          this.opts.onError?.(new FirehoseWorkerError(res.error))
-        }
-        if (res?.cursor && !isNaN(res.cursor)) {
-          this.cursor = `${res.cursor}`
-        }
-      })
-      .catch((err) => {
-        this.opts.onError?.(new FirehoseWorkerError(err))
-      })
+  protected onProcessed = (res: any) => {
+    if (res?.success) {
+      messagesProcessed++
+    } else if (res?.error) {
+      this.opts.onError?.(new FirehoseWorkerError(res.error))
+    }
+    if (res?.cursor && !isNaN(res.cursor)) {
+      this.cursor = `${res.cursor}`
+    }
   }
 
   async destroy() {

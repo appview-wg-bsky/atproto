@@ -32,7 +32,7 @@
     "@redis/client": "^1.6.0",
     "multiformats": "^13.3.2",
     "sharedmap": "^1.2.0",
-    "p-queue": "^6.6.2",
+    "fastq": "^1.19.1",
     "piscina": "^5.0.0-alpha.2"
   },
   "devDependencies": {

@@ -1,11 +1,11 @@
 import { setTimeout } from 'node:timers/promises'
-import { workerData } from 'node:worker_threads'
+import { parentPort, workerData } from 'node:worker_threads'
 import { readCar as iterateCar } from '@atcute/car'
 import { decode, decodeFirst, fromBytes, toCidLink } from '@atcute/cbor'
 import type { ComAtprotoSyncSubscribeRepos } from '@atcute/client/lexicons'
 import type { Event, RepoOp } from '@skyware/firehose'
+import fastq from 'fastq'
 import { CID } from 'multiformats/cid'
-import PQueue from 'p-queue'
 import SharedMap from 'sharedmap'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing/index.js'
@@ -31,7 +31,8 @@ if (!dbOptions || !idResolverOptions || !didLockMap) {
   throw new Error('worker missing options')
 }
 
-// const queue = new PQueue({ concurrency: 10 })
+const processChunkQueue = fastq(processChunk, 10)
+const indexEventQueue = fastq.promise(tryIndexEvent, 10)
 
 Object.setPrototypeOf(didLockMap, SharedMap.prototype)
 
@@ -43,40 +44,45 @@ const idResolver = new IdResolver({
 const background = new BackgroundQueue(db)
 const indexingSvc = new IndexingService(db, idResolver, background)
 
-const worker = async (chunk: Uint8Array) => {
-  // void queue.add(async () => {
-  //   try {
-  //     const event = decodeChunk(chunk)
-  //     if (!event) return { success: true }
-  //
-  //     const { did, seq } = didAndSeq(event)
-  //     let attempt = 0
-  //
-  //     while (attempt < 5) {
-  //       try {
-  //         await acquireDidLock(did, seq, 60_000)
-  //         await indexEvent(event)
-  //         return { success: true, cursor: seq }
-  //       } catch (err) {
-  //         attempt++
-  //         if (err instanceof LockTimeoutError) {
-  //           await setTimeout(10_000)
-  //           continue
-  //         }
-  //         throw err
-  //       } finally {
-  //         try {
-  //           didLockMap.delete(did)
-  //         } catch {}
-  //       }
-  //     }
-  //
-  //     return { success: false, error: `max attempts reached for ${did} ${seq}` }
-  //   } catch (err) {
-  //     return { success: false, error: err }
-  //   }
-  // })
-  return { success: true }
+const worker = (chunk: Uint8Array) => processChunkQueue.push(chunk)
+
+function processChunk(chunk: Uint8Array) {
+  const event = decodeChunk(chunk)
+  if (!event) return { success: true }
+  void indexEventQueue
+    .push(event)
+    .then((res) => parentPort.postMessage(res))
+    .catch((err) => parentPort.postMessage({ success: false, error: err }))
+}
+
+async function tryIndexEvent(
+  event: Event,
+): Promise<{ success: boolean; cursor?: number; error?: unknown }> {
+  const { did, seq } = didAndSeq(event)
+  let attempt = 0
+
+  while (attempt < 5) {
+    try {
+      await acquireDidLock(did, seq, 60_000)
+      await indexEvent(event)
+      return { success: true, cursor: seq }
+    } catch (err) {
+      attempt++
+      if (err instanceof LockTimeoutError) {
+        await setTimeout(10_000)
+        continue
+      }
+      throw err
+    } finally {
+      try {
+        didLockMap.delete(did)
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return { success: false, error: `max attempts reached for ${did} ${seq}` }
 }
 
 async function indexEvent(event: Event) {
