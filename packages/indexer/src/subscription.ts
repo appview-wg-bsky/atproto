@@ -28,7 +28,7 @@ export class FirehoseSubscription {
   protected settings = {
     minWorkers: availableParallelism() / 2,
     maxWorkers: availableParallelism() * 4,
-    maxConcurrency: 1,
+    maxConcurrency: 32,
   }
 
   constructor(protected opts: FirehoseSubscriptionOptions) {
@@ -43,8 +43,8 @@ export class FirehoseSubscription {
     this.piscina = new Piscina({
       filename: this.WORKER_PATH,
       env: SHARE_ENV,
-      minThreads: 50,
-      maxThreads: 50,
+      minThreads: 10,
+      maxThreads: 10,
       concurrentTasksPerWorker: this.settings.maxConcurrency,
       idleTimeout: Infinity,
       taskQueue: new FixedQueue(),
