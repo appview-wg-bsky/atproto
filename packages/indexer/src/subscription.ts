@@ -43,8 +43,8 @@ export class FirehoseSubscription {
     this.piscina = new Piscina({
       filename: this.WORKER_PATH,
       env: SHARE_ENV,
-      minThreads: 10,
-      maxThreads: 10,
+      minThreads: 20,
+      maxThreads: 20,
       concurrentTasksPerWorker: this.settings.maxConcurrency,
       idleTimeout: Infinity,
       taskQueue: new FixedQueue(),
@@ -52,6 +52,7 @@ export class FirehoseSubscription {
         process.platform !== 'win32'
           ? 10
           : WindowsThreadPriority.ThreadPriorityAboveNormal,
+      atomics: 'async',
       workerData: {
         dbOptions,
         idResolverOptions,
@@ -115,9 +116,7 @@ export class FirehoseSubscription {
 
   protected processChunk = (chunk: Uint8Array) => {
     void this.piscina
-      .run(chunk, {
-        transferList: [chunk.buffer],
-      })
+      .run(Piscina.move(chunk))
       .then((res) => {
         if (res?.success) {
           messagesProcessed++
