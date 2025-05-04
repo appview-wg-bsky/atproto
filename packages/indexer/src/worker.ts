@@ -1,12 +1,11 @@
+import { setTimeout } from 'node:timers/promises'
 import { workerData } from 'node:worker_threads'
-import { readCar } from '@atcute/car'
-import type {
-  AccountEvent,
-  CommitEvent,
-  IdentityEvent,
-  SyncEvent,
-} from '@skyware/firehose'
+import { readCar as iterateCar } from '@atcute/car'
+import { decode, decodeFirst, fromBytes, toCidLink } from '@atcute/cbor'
+import type { ComAtprotoSyncSubscribeRepos } from '@atcute/client/lexicons'
+import type { Event, RepoOp } from '@skyware/firehose'
 import { CID } from 'multiformats/cid'
+import { SharedMap } from 'sharedmap'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing/index.js'
 import { IdResolver, MemoryCache } from '@atproto/identity'
@@ -19,11 +18,19 @@ if (!workerData) {
   throw new Error('Must be run as a worker')
 }
 
-const { dbOptions, idResolverOptions } =
-  workerData as FirehoseSubscriptionOptions
-if (!dbOptions || !idResolverOptions) {
+type WorkerData = Pick<
+  FirehoseSubscriptionOptions,
+  'dbOptions' | 'idResolverOptions'
+> & {
+  didLockMap: SharedMap
+}
+
+const { dbOptions, idResolverOptions, didLockMap } = workerData as WorkerData
+if (!dbOptions || !idResolverOptions || !didLockMap) {
   throw new Error('worker missing options')
 }
+
+Object.setPrototypeOf(didLockMap, SharedMap.prototype)
 
 const db = new Database(dbOptions)
 
@@ -34,28 +41,62 @@ const idResolver = new IdResolver({
 const background = new BackgroundQueue(db)
 const indexingSvc = new IndexingService(db, idResolver, background)
 
-const worker = async (
-  msg: CommitEvent | AccountEvent | IdentityEvent | SyncEvent,
-) => {
-  if (!msg) return { success: true }
+const worker = async (chunk: Uint8Array) => {
   try {
-    if (msg.$type === 'com.atproto.sync.subscribeRepos#identity') {
-      await indexingSvc.indexHandle(msg.did, msg.time, true)
-    } else if (msg.$type === 'com.atproto.sync.subscribeRepos#account') {
-      if (msg.active === false && msg.status === 'deleted') {
-        await indexingSvc.deleteActor(msg.did)
-      } else {
-        await indexingSvc.updateActorStatus(msg.did, msg.active, msg.status)
+    const event = decodeChunk(chunk)
+    if (!event) return { success: true }
+
+    const { did, seq } = didAndSeq(event)
+    let attempt = 0
+
+    while (attempt < 5) {
+      try {
+        await acquireDidLock(did, seq, 60_000)
+        await indexEvent(event)
+        return { success: true, cursor: seq }
+      } catch (err) {
+        attempt++
+        if (err instanceof LockTimeoutError) {
+          await setTimeout(10_000)
+          continue
+        }
+        throw err
+      } finally {
+        didLockMap.delete(did)
       }
-    } else if (msg.$type === 'com.atproto.sync.subscribeRepos#sync') {
-      const cid = parseCid(readCar(msg.blocks).header.data.roots[0])
+    }
+
+    return { success: false, error: `max attempts reached for ${did} ${seq}` }
+  } catch (err) {
+    return { success: false, error: err }
+  }
+}
+
+async function indexEvent(event: Event) {
+  if (!event) return { success: true }
+
+  try {
+    if (event.$type === 'com.atproto.sync.subscribeRepos#identity') {
+      await indexingSvc.indexHandle(event.did, event.time, true)
+    } else if (event.$type === 'com.atproto.sync.subscribeRepos#account') {
+      if (event.active === false && event.status === 'deleted') {
+        await indexingSvc.deleteActor(event.did)
+      } else {
+        await indexingSvc.updateActorStatus(
+          event.did,
+          event.active,
+          event.status,
+        )
+      }
+    } else if (event.$type === 'com.atproto.sync.subscribeRepos#sync') {
+      const cid = parseCid(iterateCar(event.blocks).header.data.roots[0])
       await Promise.all([
-        indexingSvc.setCommitLastSeen(msg.did, cid, msg.rev),
-        indexingSvc.indexHandle(msg.did, msg.time),
+        indexingSvc.setCommitLastSeen(event.did, cid, event.rev),
+        indexingSvc.indexHandle(event.did, event.time),
       ])
-    } else if (msg.$type === 'com.atproto.sync.subscribeRepos#commit') {
-      for (const op of msg.ops) {
-        const uri = AtUri.make(msg.repo, ...op.path.split('/'))
+    } else if (event.$type === 'com.atproto.sync.subscribeRepos#commit') {
+      for (const op of event.ops) {
+        const uri = AtUri.make(event.repo, ...op.path.split('/'))
         const indexFn =
           op.action === 'delete'
             ? indexingSvc.deleteRecord(uri)
@@ -66,12 +107,12 @@ const worker = async (
                 op.action === 'create'
                   ? WriteOpAction.Create
                   : WriteOpAction.Update,
-                msg.time,
+                event.time,
               )
-        background.add(() => indexingSvc.indexHandle(msg.repo, msg.time))
+        background.add(() => indexingSvc.indexHandle(event.repo, event.time))
         await Promise.all([
           indexFn,
-          indexingSvc.setCommitLastSeen(msg.repo, msg.commit, msg.rev),
+          indexingSvc.setCommitLastSeen(event.repo, event.commit, event.rev),
         ])
       }
     }
@@ -79,6 +120,138 @@ const worker = async (
   } catch (err) {
     return { success: false, error: err }
   }
+}
+
+function decodeChunk(chunk: Uint8Array): Event {
+  const [header, remainder] = decodeFirst(chunk)
+  const [body, remainder2] = decodeFirst(remainder)
+  if (remainder2.length > 0) {
+    throw new Error('excess bytes in message')
+  }
+
+  const { t, op } = parseHeader(header)
+
+  if (op === -1) {
+    throw new Error(`error: ${body.message}\nerror code: ${body.error}`)
+  }
+
+  if (t === '#commit') {
+    const {
+      seq,
+      repo,
+      commit,
+      rev,
+      since,
+      blocks: blocksBytes,
+      ops: commitOps,
+      prevData,
+      time,
+    } = body as ComAtprotoSyncSubscribeRepos.Commit
+
+    if (!blocksBytes?.$bytes?.length) return
+
+    const blocks = fromBytes(blocksBytes)
+    if (!blocks?.length) return
+
+    const car = readCar(blocks)
+
+    const ops: Array<RepoOp> = []
+    for (const op of commitOps) {
+      const action: 'create' | 'update' | 'delete' = op.action as any
+      if (action === 'create') {
+        if (!op.cid) continue
+        const record = car.get(op.cid.$link)
+        if (!record) continue
+        ops.push({
+          action,
+          path: op.path,
+          cid: op.cid.$link,
+          record,
+        })
+      } else if (action === 'update') {
+        if (!op.cid) continue
+        const record = car.get(op.cid.$link)
+        if (!record) continue
+        ops.push({
+          action,
+          path: op.path,
+          cid: op.cid.$link,
+          ...(op.prev ? { prev: op.prev.$link } : {}),
+          record,
+        })
+      } else if (action === 'delete') {
+        ops.push({
+          action,
+          path: op.path,
+          ...(op.prev ? { prev: op.prev.$link } : {}),
+        })
+      } else {
+        throw new Error(`Unknown action: ${action}`)
+      }
+    }
+
+    return {
+      $type: 'com.atproto.sync.subscribeRepos#commit',
+      seq,
+      repo,
+      commit: commit.$link,
+      rev,
+      since,
+      blocks,
+      ops,
+      ...(prevData ? { prevData: prevData.$link } : {}),
+      time,
+    }
+  } else if (t === '#sync') {
+    const {
+      seq,
+      did,
+      blocks: blocksBytes,
+      rev,
+      time,
+    } = body as ComAtprotoSyncSubscribeRepos.Sync
+
+    if (!blocksBytes?.$bytes?.length) return
+    const blocks = fromBytes(blocksBytes)
+
+    return {
+      $type: 'com.atproto.sync.subscribeRepos#sync',
+      seq,
+      did,
+      blocks,
+      rev,
+      time,
+    }
+  } else if (t === '#account' || t === '#identity') {
+    return {
+      $type: `com.atproto.sync.subscribeRepos${t}`,
+      ...body,
+    }
+  } else {
+    console.warn(`unknown message type ${t} ${body}`)
+  }
+}
+
+function parseHeader(header: any): { t: string; op: 1 | -1 } {
+  if (
+    !header ||
+    typeof header !== 'object' ||
+    !header.t ||
+    typeof header.t !== 'string' ||
+    !header.op ||
+    typeof header.op !== 'number'
+  ) {
+    throw new Error('invalid header received')
+  }
+  return { t: header.t, op: header.op }
+}
+
+function readCar(buffer: Uint8Array): Map<string, unknown> {
+  const records = new Map<string, unknown>()
+  for (const { cid, bytes } of iterateCar(buffer).iterate()) {
+    records.set(toCidLink(cid).$link, decode(bytes))
+  }
+  return records
 }
 
 function parseCid(
@@ -147,5 +320,28 @@ function jsonToLex(val: Record<string, unknown>): unknown {
   }
   return val
 }
+
+function didAndSeq(evt: Event) {
+  if ('did' in evt) return { did: evt.did, seq: evt.seq }
+  else if ('repo' in evt) return { did: evt.repo, seq: evt.seq }
+  throw new Error(`evt missing did or repo ${JSON.stringify(evt)}`)
+}
+
+async function acquireDidLock(
+  did: string,
+  seq: number,
+  timeoutMs: number,
+): Promise<void> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (!didLockMap.has(did)) {
+      return didLockMap.set(did, seq)
+    }
+    await setTimeout(100)
+  }
+  throw new LockTimeoutError(`Timeout waiting for lock on ${did}`)
+}
+
+class LockTimeoutError extends Error {}
 
 export default worker

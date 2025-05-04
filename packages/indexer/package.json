@@ -30,7 +30,7 @@
     "@atproto/xrpc-server": "workspace:^",
     "@redis/client": "^1.6.0",
     "multiformats": "^13.3.2",
-    "p-limit": "^6.2.0",
+    "sharedmap": "^1.2.0",
     "piscina": "^5.0.0-alpha.2"
   },
   "devDependencies": {
