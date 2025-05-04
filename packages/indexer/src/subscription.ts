@@ -31,9 +31,9 @@ export class FirehoseSubscription {
   protected saveCursorInterval: NodeJS.Timer | null = null
 
   protected settings = {
-    minWorkers: availableParallelism(),
+    minWorkers: availableParallelism() / 2,
     maxWorkers: availableParallelism() * 4,
-    maxConcurrency: 20,
+    maxConcurrency: 50,
   }
 
   constructor(protected opts: FirehoseSubscriptionOptions) {
@@ -48,7 +48,7 @@ export class FirehoseSubscription {
       filename: this.WORKER_PATH,
       env: SHARE_ENV,
       minThreads: Math.max(16, this.settings.minWorkers),
-      maxThreads: Math.min(this.settings.maxWorkers, 96),
+      maxThreads: Math.min(this.settings.maxWorkers, 48),
       concurrentTasksPerWorker: this.settings.maxConcurrency,
       idleTimeout: Infinity,
       taskQueue: new FixedQueue(),
