@@ -5,6 +5,7 @@ import { decode, decodeFirst, fromBytes, toCidLink } from '@atcute/cbor'
 import type { ComAtprotoSyncSubscribeRepos } from '@atcute/client/lexicons'
 import type { Event, RepoOp } from '@skyware/firehose'
 import { CID } from 'multiformats/cid'
+import PQueue from 'p-queue'
 import SharedMap from 'sharedmap'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing/index.js'
@@ -30,10 +31,11 @@ if (!dbOptions || !idResolverOptions || !didLockMap) {
   throw new Error('worker missing options')
 }
 
+const queue = new PQueue({ concurrency: 10 })
+
 Object.setPrototypeOf(didLockMap, SharedMap.prototype)
 
 const db = new Database(dbOptions)
-
 const idResolver = new IdResolver({
   ...idResolverOptions,
   didCache: new MemoryCache(),
@@ -42,36 +44,39 @@ const background = new BackgroundQueue(db)
 const indexingSvc = new IndexingService(db, idResolver, background)
 
 const worker = async (chunk: Uint8Array) => {
-  try {
-    const event = decodeChunk(chunk)
-    if (!event) return { success: true }
+  void queue.add(async () => {
+    try {
+      const event = decodeChunk(chunk)
+      if (!event) return { success: true }
 
-    const { did, seq } = didAndSeq(event)
-    let attempt = 0
+      const { did, seq } = didAndSeq(event)
+      let attempt = 0
 
-    while (attempt < 5) {
-      try {
-        await acquireDidLock(did, seq, 60_000)
-        await indexEvent(event)
-        return { success: true, cursor: seq }
-      } catch (err) {
-        attempt++
-        if (err instanceof LockTimeoutError) {
-          await setTimeout(10_000)
-          continue
-        }
-        throw err
-      } finally {
+      while (attempt < 5) {
         try {
-          didLockMap.delete(did)
-        } catch {}
+          await acquireDidLock(did, seq, 60_000)
+          await indexEvent(event)
+          return { success: true, cursor: seq }
+        } catch (err) {
+          attempt++
+          if (err instanceof LockTimeoutError) {
+            await setTimeout(10_000)
+            continue
+          }
+          throw err
+        } finally {
+          try {
+            didLockMap.delete(did)
+          } catch {}
+        }
       }
-    }
 
-    return { success: false, error: `max attempts reached for ${did} ${seq}` }
-  } catch (err) {
-    return { success: false, error: err }
-  }
+      return { success: false, error: `max attempts reached for ${did} ${seq}` }
+    } catch (err) {
+      return { success: false, error: err }
+    }
+  })
+  return { success: true }
 }
 
 async function indexEvent(event: Event) {

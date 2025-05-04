@@ -612,6 +612,9 @@ importers:
       multiformats:
         specifier: ^13.3.2
         version: 13.3.2
+      p-queue:
+        specifier: ^6.6.2
+        version: 6.6.2
       piscina:
         specifier: ^5.0.0-alpha.2
         version: 5.0.0-alpha.2
