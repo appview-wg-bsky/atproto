@@ -33,7 +33,7 @@ export class FirehoseSubscription {
   protected settings = {
     minWorkers: availableParallelism(),
     maxWorkers: availableParallelism() * 4,
-    maxConcurrency: 50,
+    maxConcurrency: 20,
   }
 
   constructor(protected opts: FirehoseSubscriptionOptions) {
