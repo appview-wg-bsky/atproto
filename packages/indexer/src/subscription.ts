@@ -141,6 +141,8 @@ export class FirehoseSubscription {
         if (!blocksBytes?.$bytes?.length) return
 
         const blocks = fromBytes(blocksBytes)
+        if (!blocks?.length) return
+
         const car = this.readCar(blocks)
 
         const ops: Array<RepoOp> = []
@@ -199,9 +201,9 @@ export class FirehoseSubscription {
           time,
         } = body as ComAtprotoSyncSubscribeRepos.Sync
 
-        const blocks = blocksBytes?.$bytes?.length
-          ? fromBytes(blocksBytes)
-          : new Uint8Array()
+        if (!blocksBytes?.$bytes?.length) return
+        const blocks = fromBytes(blocksBytes)
+
         this.queueMessage({
           $type: 'com.atproto.sync.subscribeRepos#sync',
           seq,
@@ -210,11 +212,13 @@ export class FirehoseSubscription {
           rev,
           time,
         })
-      } else {
+      } else if (t === '#account' || t === '#identity') {
         this.queueMessage({
           $type: `com.atproto.sync.subscribeRepos${t}`,
           ...body,
         })
+      } else {
+        console.warn(`unknown message type ${t} ${body}`)
       }
     } catch (err) {
       this.opts.onError?.(new FirehoseSubscriptionError(err))
