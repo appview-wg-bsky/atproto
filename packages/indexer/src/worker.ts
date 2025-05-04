@@ -31,7 +31,7 @@ if (!dbOptions || !idResolverOptions || !didLockMap) {
   throw new Error('worker missing options')
 }
 
-const queue = new PQueue({ concurrency: 10 })
+// const queue = new PQueue({ concurrency: 10 })
 
 Object.setPrototypeOf(didLockMap, SharedMap.prototype)
 
@@ -44,38 +44,38 @@ const background = new BackgroundQueue(db)
 const indexingSvc = new IndexingService(db, idResolver, background)
 
 const worker = async (chunk: Uint8Array) => {
-  void queue.add(async () => {
-    try {
-      const event = decodeChunk(chunk)
-      if (!event) return { success: true }
-
-      const { did, seq } = didAndSeq(event)
-      let attempt = 0
-
-      while (attempt < 5) {
-        try {
-          await acquireDidLock(did, seq, 60_000)
-          await indexEvent(event)
-          return { success: true, cursor: seq }
-        } catch (err) {
-          attempt++
-          if (err instanceof LockTimeoutError) {
-            await setTimeout(10_000)
-            continue
-          }
-          throw err
-        } finally {
-          try {
-            didLockMap.delete(did)
-          } catch {}
-        }
-      }
-
-      return { success: false, error: `max attempts reached for ${did} ${seq}` }
-    } catch (err) {
-      return { success: false, error: err }
-    }
-  })
+  // void queue.add(async () => {
+  //   try {
+  //     const event = decodeChunk(chunk)
+  //     if (!event) return { success: true }
+  //
+  //     const { did, seq } = didAndSeq(event)
+  //     let attempt = 0
+  //
+  //     while (attempt < 5) {
+  //       try {
+  //         await acquireDidLock(did, seq, 60_000)
+  //         await indexEvent(event)
+  //         return { success: true, cursor: seq }
+  //       } catch (err) {
+  //         attempt++
+  //         if (err instanceof LockTimeoutError) {
+  //           await setTimeout(10_000)
+  //           continue
+  //         }
+  //         throw err
+  //       } finally {
+  //         try {
+  //           didLockMap.delete(did)
+  //         } catch {}
+  //       }
+  //     }
+  //
+  //     return { success: false, error: `max attempts reached for ${did} ${seq}` }
+  //   } catch (err) {
+  //     return { success: false, error: err }
+  //   }
+  // })
   return { success: true }
 }
 
