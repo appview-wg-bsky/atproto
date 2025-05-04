@@ -1,6 +1,7 @@
 import { availableParallelism } from 'node:os'
 import { setTimeout } from 'node:timers/promises'
 import { SHARE_ENV } from 'node:worker_threads'
+import { WindowsThreadPriority } from '@napi-rs/nice'
 import { type RedisClientOptions, createClient } from '@redis/client'
 import { FixedQueue, Piscina } from 'piscina'
 import SharedMap from 'sharedmap'
@@ -27,7 +28,7 @@ export class FirehoseSubscription {
   protected settings = {
     minWorkers: availableParallelism() / 2,
     maxWorkers: availableParallelism() * 4,
-    maxConcurrency: 50,
+    maxConcurrency: 10,
   }
 
   constructor(protected opts: FirehoseSubscriptionOptions) {
@@ -42,11 +43,15 @@ export class FirehoseSubscription {
     this.piscina = new Piscina({
       filename: this.WORKER_PATH,
       env: SHARE_ENV,
-      minThreads: Math.max(16, this.settings.minWorkers),
-      maxThreads: Math.min(this.settings.maxWorkers, 48),
+      minThreads: 16,
+      maxThreads: 16,
       concurrentTasksPerWorker: this.settings.maxConcurrency,
       idleTimeout: Infinity,
       taskQueue: new FixedQueue(),
+      niceIncrement:
+        process.platform !== 'win32'
+          ? 10
+          : WindowsThreadPriority.ThreadPriorityAboveNormal,
       workerData: {
         dbOptions,
         idResolverOptions,

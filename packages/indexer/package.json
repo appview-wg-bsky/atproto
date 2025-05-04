@@ -28,6 +28,7 @@
     "@atproto/repo": "workspace:^",
     "@atproto/syntax": "workspace:^",
     "@atproto/xrpc-server": "workspace:^",
+    "@napi-rs/nice": "^1.0.1",
     "@redis/client": "^1.6.0",
     "multiformats": "^13.3.2",
     "sharedmap": "^1.2.0",

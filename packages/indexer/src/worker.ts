@@ -62,7 +62,9 @@ const worker = async (chunk: Uint8Array) => {
         }
         throw err
       } finally {
-        didLockMap.delete(did)
+        try {
+          didLockMap.delete(did)
+        } catch {}
       }
     }
 

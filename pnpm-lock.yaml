@@ -603,6 +603,9 @@ importers:
       '@atproto/xrpc-server':
         specifier: workspace:^
         version: link:../xrpc-server
+      '@napi-rs/nice':
+        specifier: ^1.0.1
+        version: 1.0.1
       '@redis/client':
         specifier: ^1.6.0
         version: 1.6.0
@@ -6874,7 +6877,6 @@ packages:
       '@napi-rs/nice-win32-ia32-msvc': 1.0.1
       '@napi-rs/nice-win32-x64-msvc': 1.0.1
     dev: false
-    optional: true
 
   /@noble/curves@1.8.0:
     resolution: {integrity: sha512-j84kjAbzEnQHaSIhRPUmB3/eVXu2k3dKPl2LOrR8fSOIL+89U+7lV117EWHtq/GHM3ReGHM46iRBdZfpc4HRUQ==}
