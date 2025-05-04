@@ -59,7 +59,6 @@ export class FirehoseSubscription {
         didLockMap,
       },
     })
-    this.piscina.on('message', this.onProcessed)
 
     if (this.opts.redisOptions)
       this.redis = createClient(this.opts.redisOptions)
@@ -107,7 +106,10 @@ export class FirehoseSubscription {
         // unsure why this is necessary, but the chunk ArrayBuffer
         // otherwise sometimes ends up detached
         const chunk = new Uint8Array(c)
-        void this.piscina.run(Piscina.move(chunk))
+        void this.piscina
+          .run(Piscina.move(chunk))
+          .then(this.onProcessed)
+          .catch((e) => this.opts.onError?.(new FirehoseWorkerError(e)))
       }
     } catch (err) {
       this.opts.onError?.(new FirehoseSubscriptionError(err))
