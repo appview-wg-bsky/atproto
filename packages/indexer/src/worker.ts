@@ -31,7 +31,7 @@ if (!dbOptions || !idResolverOptions || !didLockMap) {
   throw new Error('worker missing options')
 }
 
-const processChunkQueue = fastq(processChunk, 10)
+const processChunkQueue = fastq.promise(processChunk, 10)
 const indexEventQueue = fastq.promise(tryIndexEvent, 10)
 
 Object.setPrototypeOf(didLockMap, SharedMap.prototype)
@@ -46,13 +46,12 @@ const indexingSvc = new IndexingService(db, idResolver, background)
 
 const worker = (chunk: Uint8Array) => processChunkQueue.push(chunk)
 
-function processChunk(chunk: Uint8Array) {
+async function processChunk(chunk: Uint8Array) {
   const event = decodeChunk(chunk)
   if (!event) return { success: true }
-  void indexEventQueue
+  return indexEventQueue
     .push(event)
-    .then((res) => parentPort.postMessage(res))
-    .catch((err) => parentPort.postMessage({ success: false, error: err }))
+    .catch((err) => ({ success: false, error: err }))
 }
 
 async function tryIndexEvent(
