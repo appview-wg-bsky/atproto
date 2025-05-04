@@ -40,39 +40,39 @@ const worker = async (
   if (!msg) return { success: true }
   try {
     if (msg.$type === 'com.atproto.sync.subscribeRepos#identity') {
-      await indexingSvc.indexHandle(msg.did, msg.time, true)
+      // await indexingSvc.indexHandle(msg.did, msg.time, true)
     } else if (msg.$type === 'com.atproto.sync.subscribeRepos#account') {
-      if (msg.active === false && msg.status === 'deleted') {
-        await indexingSvc.deleteActor(msg.did)
-      } else {
-        await indexingSvc.updateActorStatus(msg.did, msg.active, msg.status)
-      }
+      // if (msg.active === false && msg.status === 'deleted') {
+      //   await indexingSvc.deleteActor(msg.did)
+      // } else {
+      //   await indexingSvc.updateActorStatus(msg.did, msg.active, msg.status)
+      // }
     } else if (msg.$type === 'com.atproto.sync.subscribeRepos#sync') {
       const cid = parseCid(readCar(msg.blocks).header.data.roots[0])
-      await Promise.all([
-        indexingSvc.setCommitLastSeen(msg.did, cid, msg.rev),
-        indexingSvc.indexHandle(msg.did, msg.time),
-      ])
+      // await Promise.all([
+      //   indexingSvc.setCommitLastSeen(msg.did, cid, msg.rev),
+      //   indexingSvc.indexHandle(msg.did, msg.time),
+      // ])
     } else if (msg.$type === 'com.atproto.sync.subscribeRepos#commit') {
       for (const op of msg.ops) {
         const uri = AtUri.make(msg.repo, ...op.path.split('/'))
-        const indexFn =
-          op.action === 'delete'
-            ? indexingSvc.deleteRecord(uri)
-            : indexingSvc.indexRecord(
-                uri,
-                op.cid,
-                jsonToLex(op.record),
-                op.action === 'create'
-                  ? WriteOpAction.Create
-                  : WriteOpAction.Update,
-                msg.time,
-              )
-        background.add(() => indexingSvc.indexHandle(msg.repo, msg.time))
-        await Promise.all([
-          indexFn,
-          indexingSvc.setCommitLastSeen(msg.repo, msg.commit, msg.rev),
-        ])
+        // const indexFn =
+        //   op.action === 'delete'
+        //     ? indexingSvc.deleteRecord(uri)
+        //     : indexingSvc.indexRecord(
+        //         uri,
+        //         op.cid,
+        //         jsonToLex(op.record),
+        //         op.action === 'create'
+        //           ? WriteOpAction.Create
+        //           : WriteOpAction.Update,
+        //         msg.time,
+        //       )
+        // background.add(() => indexingSvc.indexHandle(msg.repo, msg.time))
+        // await Promise.all([
+        //   indexFn,
+        //   indexingSvc.setCommitLastSeen(msg.repo, msg.commit, msg.rev),
+        // ])
       }
     }
     return { success: true }

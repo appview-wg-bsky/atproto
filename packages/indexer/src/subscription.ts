@@ -102,6 +102,8 @@ export class FirehoseSubscription {
 
       for await (const c of this.firehose) {
         messagesReceived++
+        // unsure why this is necessary, but the chunk ArrayBuffer otherwise sometimes
+        // ends up detached by the time it gets to the worker
         const chunk = new Uint8Array(c)
         void this.processChunk(chunk)
       }
