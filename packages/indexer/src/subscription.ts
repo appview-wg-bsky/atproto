@@ -43,8 +43,8 @@ export class FirehoseSubscription {
     this.piscina = new Piscina({
       filename: this.WORKER_PATH,
       env: SHARE_ENV,
-      minThreads: 5,
-      maxThreads: 5,
+      minThreads: 50,
+      maxThreads: 50,
       concurrentTasksPerWorker: this.settings.maxConcurrency,
       idleTimeout: Infinity,
       taskQueue: new FixedQueue(),
