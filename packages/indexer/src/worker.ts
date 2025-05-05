@@ -1,12 +1,10 @@
-import { setTimeout } from 'node:timers/promises'
 import { workerData } from 'node:worker_threads'
 import { readCar as iterateCar } from '@atcute/car'
 import { decode, decodeFirst, fromBytes, toCidLink } from '@atcute/cbor'
 import type { ComAtprotoSyncSubscribeRepos } from '@atcute/client/lexicons'
 import type { Event, RepoOp } from '@skyware/firehose'
 import { CID } from 'multiformats/cid'
-import { ThreadWorker } from 'poolifier'
-import SharedMap from 'sharedmap'
+import { ClusterWorker } from 'poolifier'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing/index.js'
 import { IdResolver, MemoryCache } from '@atproto/identity'
@@ -22,9 +20,7 @@ if (!workerData) {
 type WorkerData = Pick<
   FirehoseSubscriptionOptions,
   'dbOptions' | 'idResolverOptions'
-> & {
-  didLockMap: SharedMap
-}
+>
 
 export type WorkerInput = {
   chunk: Uint8Array
@@ -36,14 +32,18 @@ export type WorkerOutput = {
   error?: unknown
 }
 
-const { dbOptions, idResolverOptions, didLockMap } = workerData as WorkerData
-if (!dbOptions || !idResolverOptions || !didLockMap) {
+const dbOptions = JSON.parse(
+  process.env.DB_OPTIONS || 'null',
+) as WorkerData['dbOptions']
+const idResolverOptions = JSON.parse(
+  process.env.ID_RESOLVER_OPTIONS || 'null',
+) as WorkerData['idResolverOptions']
+
+if (!dbOptions || !idResolverOptions) {
   throw new Error('worker missing options')
 }
 
-Object.setPrototypeOf(didLockMap, SharedMap.prototype)
-
-class Worker extends ThreadWorker<WorkerInput, WorkerOutput> {
+class Worker extends ClusterWorker<WorkerInput, WorkerOutput> {
   db = new Database(dbOptions)
   idResolver = new IdResolver({
     ...idResolverOptions,
@@ -77,28 +77,27 @@ class Worker extends ThreadWorker<WorkerInput, WorkerOutput> {
     const { did, seq } = didAndSeq(event)
     let attempt = 0
 
-    while (attempt < 5) {
+    while (attempt <= 5) {
       try {
-        await acquireDidLock(did, seq, 60_000)
+        // TODO: some way to lock on did across workers
+        // that or accept possible out of order events on occasion
         await this.indexEvent(event)
         return { success: true, cursor: seq }
       } catch (err) {
         attempt++
-        if (err instanceof LockTimeoutError) {
-          await setTimeout(10_000)
-          continue
-        }
-        throw err
-      } finally {
-        try {
-          didLockMap.delete(did)
-        } catch {
-          // ignore
+        if (attempt > 5) {
+          return {
+            success: false,
+            error: `max attempts reached for ${did} ${seq}\n${err}`,
+          }
         }
       }
     }
 
-    return { success: false, error: `max attempts reached for ${did} ${seq}` }
+    return {
+      success: false,
+      error: `max attempts reached for ${did} ${seq}`,
+    }
   }
 
   async indexEvent(event: Event) {
@@ -362,22 +361,5 @@ function didAndSeq(evt: Event) {
   else if ('repo' in evt) return { did: evt.repo, seq: evt.seq }
   throw new Error(`evt missing did or repo ${JSON.stringify(evt)}`)
 }
-
-async function acquireDidLock(
-  did: string,
-  seq: number,
-  timeoutMs: number,
-): Promise<void> {
-  const start = Date.now()
-  while (Date.now() - start < timeoutMs) {
-    if (!didLockMap.has(did)) {
-      return didLockMap.set(did, seq)
-    }
-    await setTimeout(100)
-  }
-  throw new LockTimeoutError(`Timeout waiting for lock on ${did}`)
-}
-
-class LockTimeoutError extends Error {}
 
 export default new Worker()

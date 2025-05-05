@@ -1,8 +1,7 @@
 import { availableParallelism } from 'node:os'
 import { setTimeout } from 'node:timers/promises'
 import { type RedisClientOptions, createClient } from '@redis/client'
-import { DynamicThreadPool } from 'poolifier'
-import SharedMap from 'sharedmap'
+import { DynamicClusterPool } from 'poolifier'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
 import type { IdentityResolverOpts } from '@atproto/identity'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server'
@@ -20,7 +19,7 @@ export class FirehoseSubscription {
   )
 
   protected firehose!: WebSocketKeepAlive
-  protected pool: DynamicThreadPool<WorkerInput, WorkerOutput>
+  protected pool: DynamicClusterPool<WorkerInput, WorkerOutput>
   protected redis?: ReturnType<typeof createClient>
 
   protected cursor = ''
@@ -40,9 +39,8 @@ export class FirehoseSubscription {
       this.settings.maxConcurrency = this.opts.maxConcurrency
 
     const { dbOptions, idResolverOptions } = this.opts
-    const didLockMap = new SharedMap(2 ** 15, 256, 16)
 
-    this.pool = new DynamicThreadPool(
+    this.pool = new DynamicClusterPool(
       this.settings.minWorkers,
       this.settings.maxWorkers,
       this.WORKER_PATH,
@@ -53,12 +51,10 @@ export class FirehoseSubscription {
           concurrency: this.settings.maxConcurrency,
           size: 100,
         },
-        workerOptions: {
-          workerData: {
-            dbOptions,
-            idResolverOptions,
-            didLockMap,
-          },
+        env: {
+          DB_OPTIONS: JSON.stringify(dbOptions),
+          ID_RESOLVER_OPTIONS: JSON.stringify(idResolverOptions),
+          VERBOSE: this.opts.verbose ? '1' : '0',
         },
       },
     )
