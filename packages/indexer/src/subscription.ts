@@ -14,7 +14,10 @@ let messagesReceived = 0,
 
 export class FirehoseSubscription {
   private REDIS_SEQ_KEY = 'bsky_indexer:seq'
-  private WORKER_PATH = new URL('./worker.js', import.meta.url).href
+  private WORKER_PATH = new URL('./worker.js', import.meta.url).href.replace(
+    'file://',
+    '',
+  )
 
   protected firehose!: WebSocketKeepAlive
   protected pool: DynamicThreadPool<WorkerInput, WorkerOutput>
