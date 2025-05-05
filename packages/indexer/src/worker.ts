@@ -4,7 +4,7 @@ import { decode, decodeFirst, fromBytes, toCidLink } from '@atcute/cbor'
 import type { ComAtprotoSyncSubscribeRepos } from '@atcute/client/lexicons'
 import type { Event, RepoOp } from '@skyware/firehose'
 import { CID } from 'multiformats/cid'
-import { ClusterWorker } from 'poolifier'
+import { ThreadWorker } from 'poolifier-web-worker'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing/index.js'
 import { IdResolver, MemoryCache } from '@atproto/identity'
@@ -12,10 +12,6 @@ import { BlobRef } from '@atproto/lexicon'
 import { WriteOpAction } from '@atproto/repo'
 import { AtUri } from '@atproto/syntax'
 import type { FirehoseSubscriptionOptions } from './subscription.js'
-
-if (!workerData) {
-  throw new Error('Must be run as a worker')
-}
 
 type WorkerData = Pick<
   FirehoseSubscriptionOptions,
@@ -32,18 +28,13 @@ export type WorkerOutput = {
   error?: unknown
 }
 
-const dbOptions = JSON.parse(
-  process.env.DB_OPTIONS || 'null',
-) as WorkerData['dbOptions']
-const idResolverOptions = JSON.parse(
-  process.env.ID_RESOLVER_OPTIONS || 'null',
-) as WorkerData['idResolverOptions']
+const { dbOptions, idResolverOptions } = workerData as WorkerData
 
 if (!dbOptions || !idResolverOptions) {
   throw new Error('worker missing options')
 }
 
-class Worker extends ClusterWorker<WorkerInput, WorkerOutput> {
+class Worker extends ThreadWorker<WorkerInput, WorkerOutput> {
   db = new Database(dbOptions)
   idResolver = new IdResolver({
     ...idResolverOptions,
@@ -80,7 +71,7 @@ class Worker extends ClusterWorker<WorkerInput, WorkerOutput> {
     while (attempt <= 5) {
       try {
         // TODO: some way to lock on did across workers
-        // that or accept possible out of order events on occasion
+        // can go back to SharedMap if we're using threads again, but doesn't work with cluster
         await this.indexEvent(event)
         return { success: true, cursor: seq }
       } catch (err) {
@@ -362,4 +353,4 @@ function didAndSeq(evt: Event) {
   throw new Error(`evt missing did or repo ${JSON.stringify(evt)}`)
 }
 
-export const indexerWorker = new Worker()
+export default new Worker()

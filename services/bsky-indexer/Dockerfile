@@ -1,3 +1,5 @@
+FROM oven/bun:1 as bun
+
 FROM node:23.11-alpine as build
 
 RUN corepack enable
@@ -54,6 +56,7 @@ RUN apk add --update dumb-init runit
 ENTRYPOINT ["dumb-init", "--"]
 
 WORKDIR /app/services/bsky-indexer
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/
 COPY --from=build /app /app
 
 EXPOSE 3000
@@ -62,7 +65,7 @@ ENV NODE_ENV=production
 
 # https://github.com/nodejs/docker-node/blob/master/docs/BestPractices.md#non-root-user
 USER node
-CMD ["node", "--heapsnapshot-signal=SIGUSR2", "--enable-source-maps", "api.js"]
+CMD ["bun", "run", "api.js"]
 
 LABEL org.opencontainers.image.source=https://github.com/bluesky-social/atproto
 LABEL org.opencontainers.image.description="Bsky App View Indexer"

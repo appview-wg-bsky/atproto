@@ -609,9 +609,12 @@ importers:
       multiformats:
         specifier: ^13.3.2
         version: 13.3.2
-      poolifier:
-        specifier: ^4.4.5
-        version: 4.4.5
+      partysocket:
+        specifier: ^1.1.3
+        version: 1.1.3
+      poolifier-web-worker:
+        specifier: ^0.4.31
+        version: 0.4.31
       sharedmap:
         specifier: ^1.2.0
         version: 1.2.0
@@ -11548,6 +11551,10 @@ packages:
     resolution: {integrity: sha512-8qz9nOz5VeD2z96elrEKD2U433+L3DWdUdDkOINLGOJvx1GsMBbMn0aCeu28y8/e85A6mCigBiFlYMnTBEGlSw==}
     dev: false
 
+  /event-target-polyfill@0.0.4:
+    resolution: {integrity: sha512-Gs6RLjzlLRdT8X9ZipJdIZI/Y6/HhRLyq9RdDlCsnpxr/+Nn6bU2EFGuC94GjxqhM+Nmij2Vcq98yoHrU8uNFQ==}
+    dev: false
+
   /event-target-shim@5.0.1:
     resolution: {integrity: sha512-i/2XbnSz/uxRCU6+NdVJgKWDTM427+MqYbkQzD321DuCQJUqOuJKIA0IM2+W2xtYHdKOmZ4dR6fExsd4SXL+WQ==}
     engines: {node: '>=6'}
@@ -14793,6 +14800,12 @@ packages:
     resolution: {integrity: sha512-CiyeOxFT/JZyN5m0z9PfXw4SCBJ6Sygz1Dpl0wqjlhDEGGBP1GnsUVEL0p63hoG1fcj3fHynXi9NYO4nWOL+qQ==}
     engines: {node: '>= 0.8'}
 
+  /partysocket@1.1.3:
+    resolution: {integrity: sha512-87Jd/nqPoWnVfzHE6Z12WLWTJ+TAgxs0b7i2S163HfQSrVDUK5tW/FC64T5N8L5ss+gqF+EV0BwjZMWggMY3UA==}
+    dependencies:
+      event-target-polyfill: 0.0.4
+    dev: false
+
   /path-browserify@1.0.1:
     resolution: {integrity: sha512-b7uo2UCUOYZcnF/3ID0lulOJi/bafxa1xPe7ZPsammBSpjSWQkjNxlt635YGS2MiR9GjvuXCtz2emr3jbsz98g==}
     dev: false
@@ -15022,9 +15035,8 @@ packages:
     resolution: {integrity: sha512-r6Q21sKsY1AjTVVjOuU02VYKVNQGJNQHjTIvs4dEbeuuYfxgYk/DGD2mqqq4RDaVkwdSq0VEtmQUOPe/wH8X3g==}
     dev: true
 
-  /poolifier@4.4.5:
-    resolution: {integrity: sha512-4DxdX11+x1D3/zBuNqblFPYwngPKnXVEbhO1cS4T/8ogCwbWp8CS6kp2zm9uJHVbQh6OOaWuVDNiqbr/Sq/YPA==}
-    engines: {node: '>=18.0.0', pnpm: '>=9.0.0'}
+  /poolifier-web-worker@0.4.31:
+    resolution: {integrity: sha512-6//28DxltkLp7zA+jKhRpVOJLeeGVvbFeifdIzHrnlt/ubxBGIzEib2EUH/uusGhj6yS9zsgKul+ZtlifN75yw==}
     dev: false
 
   /possible-typed-array-names@1.0.0:

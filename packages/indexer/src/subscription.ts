@@ -1,9 +1,8 @@
-import { availableParallelism } from 'node:os'
 import { type RedisClientOptions, createClient } from '@redis/client'
-import { DynamicClusterPool } from 'poolifier'
+import { WebSocket } from 'partysocket'
+import { DynamicThreadPool, availableParallelism } from 'poolifier-web-worker'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
 import type { IdentityResolverOpts } from '@atproto/identity'
-import { WebSocketKeepAlive } from '@atproto/xrpc-server'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors.js'
 import type { WorkerInput, WorkerOutput } from './worker.js'
 
@@ -12,19 +11,15 @@ let messagesReceived = 0,
 
 export class FirehoseSubscription {
   private REDIS_SEQ_KEY = 'bsky_indexer:seq'
-  private WORKER_PATH = new URL('./worker.js', import.meta.url).href.replace(
-    'file://',
-    '',
-  )
+  private WORKER_PATH = new URL('./worker.js', import.meta.url)
 
-  protected firehose!: WebSocketKeepAlive
-  protected pool: DynamicClusterPool<WorkerInput, WorkerOutput>
+  protected firehose!: WebSocket
+  protected pool: DynamicThreadPool<WorkerInput, WorkerOutput>
   protected redis?: ReturnType<typeof createClient>
 
   protected cursor = ''
   protected logStatsInterval: NodeJS.Timer | null = null
   protected saveCursorInterval: NodeJS.Timer | null = null
-  protected poolReady: Promise<void> | null = null
 
   protected settings = {
     minWorkers: availableParallelism() / 2,
@@ -38,12 +33,9 @@ export class FirehoseSubscription {
     if (this.opts.maxConcurrency)
       this.settings.maxConcurrency = this.opts.maxConcurrency
 
-    let resolve: () => void
-    this.poolReady = new Promise((r) => (resolve = r))
-
     const { dbOptions, idResolverOptions } = this.opts
 
-    this.pool = new DynamicClusterPool(
+    this.pool = new DynamicThreadPool(
       this.settings.minWorkers,
       this.settings.maxWorkers,
       this.WORKER_PATH,
@@ -56,21 +48,8 @@ export class FirehoseSubscription {
           concurrency: this.settings.maxConcurrency,
           size: 100,
         },
-        env: {
-          DB_OPTIONS: JSON.stringify(dbOptions),
-          ID_RESOLVER_OPTIONS: JSON.stringify(idResolverOptions),
-          VERBOSE: this.opts.verbose ? '1' : '0',
-        },
-        onlineHandler: () => {
-          resolve()
-          this.poolReady = null
-        },
-        errorHandler: (err) => {
-          if (err instanceof FirehoseWorkerError) {
-            this.opts.onError?.(err)
-          } else {
-            console.error('Worker error:', err)
-          }
+        workerOptions: {
+          workerData: { dbOptions, idResolverOptions },
         },
       },
     )
@@ -94,12 +73,21 @@ export class FirehoseSubscription {
       this.cursor = this.opts.cursor.toString()
     } else console.log(`starting from latest`)
 
-    if (this.poolReady) await this.poolReady
-
-    this.firehose = new WebSocketKeepAlive({
-      getUrl: async () =>
+    this.firehose = new WebSocket(
+      () =>
         `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos?cursor=${this.cursor}`,
-    })
+    )
+
+    this.firehose.onmessage = ({ data }) => {
+      messagesReceived++
+      void this.pool
+        .execute({ chunk: data })
+        .then(this.onProcessed)
+        .catch((e) => this.opts.onError?.(new FirehoseWorkerError(e)))
+    }
+
+    this.firehose.onerror = (e) =>
+      this.opts.onError?.(new FirehoseSubscriptionError(e.error))
 
     if (!this.logStatsInterval)
       this.logStatsInterval = setInterval(() => {
@@ -113,22 +101,6 @@ export class FirehoseSubscription {
       this.saveCursorInterval = setInterval(async () => {
         await this.redis.set(this.REDIS_SEQ_KEY, this.cursor)
       }, 60_000)
-    }
-
-    try {
-      for await (const c of this.firehose) {
-        messagesReceived++
-        // unsure why this is necessary, but the chunk ArrayBuffer
-        // otherwise sometimes ends up detached
-        const chunk = new Uint8Array(c)
-        void this.pool
-          .execute({ chunk })
-          .then(this.onProcessed)
-          .catch((e) => this.opts.onError?.(new FirehoseWorkerError(e)))
-      }
-    } catch (err) {
-      this.opts.onError?.(new FirehoseSubscriptionError(err))
-      return this.start()
     }
   }
 
