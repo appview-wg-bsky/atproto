@@ -362,4 +362,4 @@ function didAndSeq(evt: Event) {
   throw new Error(`evt missing did or repo ${JSON.stringify(evt)}`)
 }
 
-export default new Worker()
+export const indexerWorker = new Worker()

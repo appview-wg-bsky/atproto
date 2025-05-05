@@ -1,5 +1,4 @@
 import { availableParallelism } from 'node:os'
-import { setTimeout } from 'node:timers/promises'
 import { type RedisClientOptions, createClient } from '@redis/client'
 import { DynamicClusterPool } from 'poolifier'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
@@ -25,6 +24,7 @@ export class FirehoseSubscription {
   protected cursor = ''
   protected logStatsInterval: NodeJS.Timer | null = null
   protected saveCursorInterval: NodeJS.Timer | null = null
+  protected poolReady: Promise<void> | null = null
 
   protected settings = {
     minWorkers: availableParallelism() / 2,
@@ -38,6 +38,9 @@ export class FirehoseSubscription {
     if (this.opts.maxConcurrency)
       this.settings.maxConcurrency = this.opts.maxConcurrency
 
+    let resolve: () => void
+    this.poolReady = new Promise((r) => (resolve = r))
+
     const { dbOptions, idResolverOptions } = this.opts
 
     this.pool = new DynamicClusterPool(
@@ -45,8 +48,10 @@ export class FirehoseSubscription {
       this.settings.maxWorkers,
       this.WORKER_PATH,
       {
+        startWorkers: true,
         enableTasksQueue: true,
-        workerChoiceStrategy: 'INTERLEAVED_WEIGHTED_ROUND_ROBIN',
+        enableEvents: false,
+        workerChoiceStrategy: 'WEIGHTED_ROUND_ROBIN',
         tasksQueueOptions: {
           concurrency: this.settings.maxConcurrency,
           size: 100,
@@ -55,6 +60,17 @@ export class FirehoseSubscription {
           DB_OPTIONS: JSON.stringify(dbOptions),
           ID_RESOLVER_OPTIONS: JSON.stringify(idResolverOptions),
           VERBOSE: this.opts.verbose ? '1' : '0',
+        },
+        onlineHandler: () => {
+          resolve()
+          this.poolReady = null
+        },
+        errorHandler: (err) => {
+          if (err instanceof FirehoseWorkerError) {
+            this.opts.onError?.(err)
+          } else {
+            console.error('Worker error:', err)
+          }
         },
       },
     )
@@ -78,6 +94,8 @@ export class FirehoseSubscription {
       this.cursor = this.opts.cursor.toString()
     } else console.log(`starting from latest`)
 
+    if (this.poolReady) await this.poolReady
+
     this.firehose = new WebSocketKeepAlive({
       getUrl: async () =>
         `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos?cursor=${this.cursor}`,
@@ -98,8 +116,6 @@ export class FirehoseSubscription {
     }
 
     try {
-      await setTimeout(10_000)
-
       for await (const c of this.firehose) {
         messagesReceived++
         // unsure why this is necessary, but the chunk ArrayBuffer
