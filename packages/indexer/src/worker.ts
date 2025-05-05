@@ -67,7 +67,7 @@ class Worker extends ClusterWorker<WorkerInput, WorkerOutput> {
         return { success, error }
       }
     } catch (err) {
-      return { success: false, error: err }
+      return { success: false, error: `uncaught error when indexing\n${err}` }
     }
   }
 
