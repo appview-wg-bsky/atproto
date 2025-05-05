@@ -1,5 +1,5 @@
 import { setTimeout } from 'node:timers/promises'
-import { parentPort, workerData } from 'node:worker_threads'
+import { workerData } from 'node:worker_threads'
 import { readCar as iterateCar } from '@atcute/car'
 import { decode, decodeFirst, fromBytes, toCidLink } from '@atcute/cbor'
 import type { ComAtprotoSyncSubscribeRepos } from '@atcute/client/lexicons'
@@ -31,8 +31,8 @@ if (!dbOptions || !idResolverOptions || !didLockMap) {
   throw new Error('worker missing options')
 }
 
-const processChunkQueue = fastq.promise(processChunk, 10)
-const indexEventQueue = fastq.promise(tryIndexEvent, 10)
+const processChunkQueue = fastq.promise(processChunk, 20)
+const indexEventQueue = fastq.promise(tryIndexEvent, 50)
 
 Object.setPrototypeOf(didLockMap, SharedMap.prototype)
 
