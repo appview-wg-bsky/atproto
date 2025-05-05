@@ -1,14 +1,13 @@
 import { availableParallelism } from 'node:os'
 import { setTimeout } from 'node:timers/promises'
-import { SHARE_ENV } from 'node:worker_threads'
-import { WindowsThreadPriority } from '@napi-rs/nice'
 import { type RedisClientOptions, createClient } from '@redis/client'
-import { FixedQueue, Piscina } from 'piscina'
+import { DynamicThreadPool } from 'poolifier'
 import SharedMap from 'sharedmap'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
 import type { IdentityResolverOpts } from '@atproto/identity'
 import { WebSocketKeepAlive } from '@atproto/xrpc-server'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors.js'
+import type { WorkerInput, WorkerOutput } from './worker.js'
 
 let messagesReceived = 0,
   messagesProcessed = 0
@@ -18,7 +17,7 @@ export class FirehoseSubscription {
   private WORKER_PATH = new URL('./worker.js', import.meta.url).href
 
   protected firehose!: WebSocketKeepAlive
-  protected piscina: Piscina
+  protected pool: DynamicThreadPool<WorkerInput, WorkerOutput>
   protected redis?: ReturnType<typeof createClient>
 
   protected cursor = ''
@@ -27,7 +26,7 @@ export class FirehoseSubscription {
 
   protected settings = {
     minWorkers: availableParallelism() / 2,
-    maxWorkers: availableParallelism() * 2,
+    maxWorkers: availableParallelism(),
     maxConcurrency: 10,
   }
 
@@ -40,25 +39,26 @@ export class FirehoseSubscription {
     const { dbOptions, idResolverOptions } = this.opts
     const didLockMap = new SharedMap(2 ** 15, 256, 16)
 
-    this.piscina = new Piscina({
-      filename: this.WORKER_PATH,
-      env: SHARE_ENV,
-      minThreads: 32,
-      maxThreads: 32,
-      concurrentTasksPerWorker: this.settings.maxConcurrency,
-      idleTimeout: Infinity,
-      taskQueue: new FixedQueue(),
-      niceIncrement:
-        process.platform !== 'win32'
-          ? 10
-          : WindowsThreadPriority.ThreadPriorityAboveNormal,
-      atomics: 'async',
-      workerData: {
-        dbOptions,
-        idResolverOptions,
-        didLockMap,
+    this.pool = new DynamicThreadPool(
+      this.settings.minWorkers,
+      this.settings.maxWorkers,
+      this.WORKER_PATH,
+      {
+        enableTasksQueue: true,
+        workerChoiceStrategy: 'INTERLEAVED_WEIGHTED_ROUND_ROBIN',
+        tasksQueueOptions: {
+          concurrency: this.settings.maxConcurrency,
+          size: 100,
+        },
+        workerOptions: {
+          workerData: {
+            dbOptions,
+            idResolverOptions,
+            didLockMap,
+          },
+        },
       },
-    })
+    )
 
     if (this.opts.redisOptions)
       this.redis = createClient(this.opts.redisOptions)
@@ -87,7 +87,7 @@ export class FirehoseSubscription {
     if (!this.logStatsInterval)
       this.logStatsInterval = setInterval(() => {
         console.log(
-          `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesReceived / 10)} per sec (${Math.round((messagesProcessed / messagesReceived) * 100)}%) [${this.piscina.threads.length}]`,
+          `${Math.round(messagesProcessed / 10)} / ${Math.round(messagesReceived / 10)} per sec (${Math.round((messagesProcessed / messagesReceived) * 100)}%) [${this.pool.info.workerNodes} workers; ${this.pool.info.queuedTasks} queued; ${this.pool.info.executingTasks} executing]`,
         )
         messagesReceived = messagesProcessed = 0
       }, 10_000)
@@ -106,8 +106,8 @@ export class FirehoseSubscription {
         // unsure why this is necessary, but the chunk ArrayBuffer
         // otherwise sometimes ends up detached
         const chunk = new Uint8Array(c)
-        void this.piscina
-          .run(Piscina.move(chunk))
+        void this.pool
+          .execute({ chunk })
           .then(this.onProcessed)
           .catch((e) => this.opts.onError?.(new FirehoseWorkerError(e)))
       }
@@ -117,7 +117,7 @@ export class FirehoseSubscription {
     }
   }
 
-  protected onProcessed = (res: any) => {
+  protected onProcessed = (res: WorkerOutput) => {
     if (res?.success) {
       messagesProcessed++
     } else if (res?.error) {
@@ -130,7 +130,7 @@ export class FirehoseSubscription {
 
   async destroy() {
     console.warn('destroying indexer')
-    await this?.piscina?.close({ force: true })
+    await this?.pool?.destroy()
     await this?.redis?.quit()
   }
 }

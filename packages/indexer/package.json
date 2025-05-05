@@ -28,12 +28,10 @@
     "@atproto/repo": "workspace:^",
     "@atproto/syntax": "workspace:^",
     "@atproto/xrpc-server": "workspace:^",
-    "@napi-rs/nice": "^1.0.1",
     "@redis/client": "^1.6.0",
     "multiformats": "^13.3.2",
     "sharedmap": "^1.2.0",
-    "fastq": "^1.19.1",
-    "piscina": "^5.0.0-alpha.2"
+    "poolifier": "^4.4.5"
   },
   "devDependencies": {
     "@atcute/client": "^3.0.1",

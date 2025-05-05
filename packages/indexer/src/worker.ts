@@ -4,8 +4,8 @@ import { readCar as iterateCar } from '@atcute/car'
 import { decode, decodeFirst, fromBytes, toCidLink } from '@atcute/cbor'
 import type { ComAtprotoSyncSubscribeRepos } from '@atcute/client/lexicons'
 import type { Event, RepoOp } from '@skyware/firehose'
-import fastq from 'fastq'
 import { CID } from 'multiformats/cid'
+import { ThreadWorker } from 'poolifier'
 import SharedMap from 'sharedmap'
 import { BackgroundQueue, Database } from '@atproto/bsky'
 import { IndexingService } from '@atproto/bsky/dist/data-plane/server/indexing/index.js'
@@ -26,111 +26,135 @@ type WorkerData = Pick<
   didLockMap: SharedMap
 }
 
+export type WorkerInput = {
+  chunk: Uint8Array
+}
+
+export type WorkerOutput = {
+  success?: boolean
+  cursor?: number
+  error?: unknown
+}
+
 const { dbOptions, idResolverOptions, didLockMap } = workerData as WorkerData
 if (!dbOptions || !idResolverOptions || !didLockMap) {
   throw new Error('worker missing options')
 }
 
-const processChunkQueue = fastq.promise(processChunk, 20)
-const indexEventQueue = fastq.promise(tryIndexEvent, 50)
-
 Object.setPrototypeOf(didLockMap, SharedMap.prototype)
 
-const db = new Database(dbOptions)
-const idResolver = new IdResolver({
-  ...idResolverOptions,
-  didCache: new MemoryCache(),
-})
-const background = new BackgroundQueue(db)
-const indexingSvc = new IndexingService(db, idResolver, background)
+class Worker extends ThreadWorker<WorkerInput, WorkerOutput> {
+  db = new Database(dbOptions)
+  idResolver = new IdResolver({
+    ...idResolverOptions,
+    didCache: new MemoryCache(),
+  })
+  background = new BackgroundQueue(this.db)
+  indexingSvc = new IndexingService(this.db, this.idResolver, this.background)
 
-const worker = (chunk: Uint8Array) => processChunkQueue.push(chunk)
+  constructor() {
+    super((data) => this.process(data), { maxInactiveTime: 120_000 })
+  }
 
-async function processChunk(chunk: Uint8Array) {
-  const event = decodeChunk(chunk)
-  if (!event) return { success: true }
-  return indexEventQueue
-    .push(event)
-    .catch((err) => ({ success: false, error: err }))
-}
-
-async function tryIndexEvent(
-  event: Event,
-): Promise<{ success: boolean; cursor?: number; error?: unknown }> {
-  const { did, seq } = didAndSeq(event)
-  let attempt = 0
-
-  while (attempt < 5) {
+  process = async ({ chunk }: WorkerInput): Promise<WorkerOutput> => {
     try {
-      await acquireDidLock(did, seq, 60_000)
-      await indexEvent(event)
-      return { success: true, cursor: seq }
+      const event = decodeChunk(chunk)
+      if (!event) return { success: true }
+      const { success, cursor, error } = await this.tryIndexEvent(event)
+      if (success) {
+        return { success, cursor }
+      } else {
+        return { success, error }
+      }
     } catch (err) {
-      attempt++
-      if (err instanceof LockTimeoutError) {
-        await setTimeout(10_000)
-        continue
-      }
-      throw err
-    } finally {
-      try {
-        didLockMap.delete(did)
-      } catch {
-        // ignore
-      }
+      return { success: false, error: err }
     }
   }
 
-  return { success: false, error: `max attempts reached for ${did} ${seq}` }
-}
+  async tryIndexEvent(
+    event: Event,
+  ): Promise<{ success: boolean; cursor?: number; error?: unknown }> {
+    const { did, seq } = didAndSeq(event)
+    let attempt = 0
 
-async function indexEvent(event: Event) {
-  if (!event) return { success: true }
-
-  try {
-    if (event.$type === 'com.atproto.sync.subscribeRepos#identity') {
-      await indexingSvc.indexHandle(event.did, event.time, true)
-    } else if (event.$type === 'com.atproto.sync.subscribeRepos#account') {
-      if (event.active === false && event.status === 'deleted') {
-        await indexingSvc.deleteActor(event.did)
-      } else {
-        await indexingSvc.updateActorStatus(
-          event.did,
-          event.active,
-          event.status,
-        )
-      }
-    } else if (event.$type === 'com.atproto.sync.subscribeRepos#sync') {
-      const cid = parseCid(iterateCar(event.blocks).header.data.roots[0])
-      await Promise.all([
-        indexingSvc.setCommitLastSeen(event.did, cid, event.rev),
-        indexingSvc.indexHandle(event.did, event.time),
-      ])
-    } else if (event.$type === 'com.atproto.sync.subscribeRepos#commit') {
-      for (const op of event.ops) {
-        const uri = AtUri.make(event.repo, ...op.path.split('/'))
-        const indexFn =
-          op.action === 'delete'
-            ? indexingSvc.deleteRecord(uri)
-            : indexingSvc.indexRecord(
-                uri,
-                op.cid,
-                jsonToLex(op.record),
-                op.action === 'create'
-                  ? WriteOpAction.Create
-                  : WriteOpAction.Update,
-                event.time,
-              )
-        background.add(() => indexingSvc.indexHandle(event.repo, event.time))
-        await Promise.all([
-          indexFn,
-          indexingSvc.setCommitLastSeen(event.repo, event.commit, event.rev),
-        ])
+    while (attempt < 5) {
+      try {
+        await acquireDidLock(did, seq, 60_000)
+        await this.indexEvent(event)
+        return { success: true, cursor: seq }
+      } catch (err) {
+        attempt++
+        if (err instanceof LockTimeoutError) {
+          await setTimeout(10_000)
+          continue
+        }
+        throw err
+      } finally {
+        try {
+          didLockMap.delete(did)
+        } catch {
+          // ignore
+        }
       }
     }
-    return { success: true }
-  } catch (err) {
-    return { success: false, error: err }
+
+    return { success: false, error: `max attempts reached for ${did} ${seq}` }
+  }
+
+  async indexEvent(event: Event) {
+    if (!event) return { success: true }
+
+    try {
+      if (event.$type === 'com.atproto.sync.subscribeRepos#identity') {
+        await this.indexingSvc.indexHandle(event.did, event.time, true)
+      } else if (event.$type === 'com.atproto.sync.subscribeRepos#account') {
+        if (event.active === false && event.status === 'deleted') {
+          await this.indexingSvc.deleteActor(event.did)
+        } else {
+          await this.indexingSvc.updateActorStatus(
+            event.did,
+            event.active,
+            event.status,
+          )
+        }
+      } else if (event.$type === 'com.atproto.sync.subscribeRepos#sync') {
+        const cid = parseCid(iterateCar(event.blocks).header.data.roots[0])
+        await Promise.all([
+          this.indexingSvc.setCommitLastSeen(event.did, cid, event.rev),
+          this.indexingSvc.indexHandle(event.did, event.time),
+        ])
+      } else if (event.$type === 'com.atproto.sync.subscribeRepos#commit') {
+        for (const op of event.ops) {
+          const uri = AtUri.make(event.repo, ...op.path.split('/'))
+          const indexFn =
+            op.action === 'delete'
+              ? this.indexingSvc.deleteRecord(uri)
+              : this.indexingSvc.indexRecord(
+                  uri,
+                  op.cid,
+                  jsonToLex(op.record),
+                  op.action === 'create'
+                    ? WriteOpAction.Create
+                    : WriteOpAction.Update,
+                  event.time,
+                )
+          this.background.add(() =>
+            this.indexingSvc.indexHandle(event.repo, event.time),
+          )
+          await Promise.all([
+            indexFn,
+            this.indexingSvc.setCommitLastSeen(
+              event.repo,
+              event.commit,
+              event.rev,
+            ),
+          ])
+        }
+      }
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err }
+    }
   }
 }
 
@@ -356,4 +380,4 @@ async function acquireDidLock(
 
 class LockTimeoutError extends Error {}
 
-export default worker
+export default new Worker()
