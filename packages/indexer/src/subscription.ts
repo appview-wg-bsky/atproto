@@ -80,7 +80,7 @@ export class FirehoseSubscription {
     this.firehose.binaryType = 'arraybuffer' // https://github.com/partykit/partykit/issues/774
 
     this.firehose.onmessage = ({ data }: { data: ArrayBuffer }) => {
-      const chunk = new Uint8Array(data)
+      const chunk = new Uint8Array(data.slice())
       messagesReceived++
       void this.pool
         .execute({ chunk }, undefined, [chunk.buffer])
