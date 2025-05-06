@@ -1,5 +1,3 @@
-FROM oven/bun:1 as bun
-
 FROM node:23.11-alpine as build
 
 RUN corepack enable
@@ -45,18 +43,9 @@ RUN pnpm install --prod --shamefully-hoist --frozen-lockfile --prefer-offline > 
 WORKDIR services/bsky-indexer
 
 # Uses assets from build stage to reduce build size
-FROM node:23.11-alpine
-
-# dumb-init is used to handle signals properly.
-# runit is installed so it can be (optionally) used for logging via svlogd.
-RUN apk add --update dumb-init runit
-
-
-# Avoid zombie processes, handle signal forwarding
-ENTRYPOINT ["dumb-init", "--"]
+FROM oven/bun:1
 
 WORKDIR /app/services/bsky-indexer
-COPY --from=bun /usr/local/bin/bun /usr/local/bin/
 COPY --from=build /app /app
 
 EXPOSE 3000
