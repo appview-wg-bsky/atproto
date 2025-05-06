@@ -79,10 +79,11 @@ export class FirehoseSubscription {
     )
     this.firehose.binaryType = 'arraybuffer' // https://github.com/partykit/partykit/issues/774
 
-    this.firehose.onmessage = ({ data }) => {
+    this.firehose.onmessage = ({ data }: { data: ArrayBuffer }) => {
+      const chunk = new Uint8Array(data)
       messagesReceived++
       void this.pool
-        .execute({ chunk: data })
+        .execute({ chunk }, undefined, [chunk.buffer])
         .then(this.onProcessed)
         .catch((e) => this.opts.onError?.(new FirehoseWorkerError(e)))
     }
