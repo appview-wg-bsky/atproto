@@ -77,6 +77,7 @@ export class FirehoseSubscription {
       () =>
         `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos?cursor=${this.cursor}`,
     )
+    this.firehose.binaryType = 'arraybuffer' // https://github.com/partykit/partykit/issues/774
 
     this.firehose.onmessage = ({ data }) => {
       messagesReceived++
