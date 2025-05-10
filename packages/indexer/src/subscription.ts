@@ -1,11 +1,10 @@
 import { availableParallelism } from 'node:os'
-import { setTimeout } from 'node:timers/promises'
 import { type RedisClientOptions, createClient } from '@redis/client'
+import { WebSocket } from 'partysocket'
 import { DynamicThreadPool } from 'poolifier'
 import SharedMap from 'sharedmap'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
 import type { IdentityResolverOpts } from '@atproto/identity'
-import { WebSocketKeepAlive } from '@atproto/xrpc-server'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors.js'
 import type { WorkerInput, WorkerOutput } from './worker.js'
 
@@ -19,7 +18,7 @@ export class FirehoseSubscription {
     '',
   )
 
-  protected firehose!: WebSocketKeepAlive
+  protected firehose!: WebSocket
   protected pool: DynamicThreadPool<WorkerInput, WorkerOutput>
   protected redis?: ReturnType<typeof createClient>
 
@@ -83,11 +82,23 @@ export class FirehoseSubscription {
       this.cursor = this.opts.cursor.toString()
     } else console.log(`starting from latest`)
 
-    this.firehose = new WebSocketKeepAlive({
-      getUrl: async () =>
+    this.firehose = new WebSocket(
+      () =>
         `${this.opts.service}/xrpc/com.atproto.sync.subscribeRepos?cursor=${this.cursor}`,
-    })
+    )
+    this.firehose.binaryType = 'arraybuffer' // https://github.com/partykit/partykit/issues/774
 
+    this.firehose.onmessage = ({ data }: { data: ArrayBuffer }) => {
+      const chunk = new Uint8Array(data)
+      messagesReceived++
+      void this.pool
+        .execute({ chunk }, undefined, [chunk.buffer])
+        .then(this.onProcessed)
+        .catch((e) => this.opts.onError?.(new FirehoseWorkerError(e)))
+    }
+
+    this.firehose.onerror = (e) =>
+      this.opts.onError?.(new FirehoseSubscriptionError(e.error))
     if (!this.logStatsInterval)
       this.logStatsInterval = setInterval(() => {
         console.log(
@@ -100,26 +111,6 @@ export class FirehoseSubscription {
       this.saveCursorInterval = setInterval(async () => {
         await this.redis.set(this.REDIS_SEQ_KEY, this.cursor)
       }, 60_000)
-    }
-
-    try {
-      await setTimeout(10_000)
-
-      for await (const c of this.firehose) {
-        messagesReceived++
-        // unsure why this is necessary, but the chunk ArrayBuffer
-        // otherwise sometimes ends up detached
-        const chunk = new Uint8Array(c)
-        void this.pool
-          .execute({ chunk })
-          .then(this.onProcessed)
-          .catch((e: unknown) =>
-            this.opts.onError?.(new FirehoseWorkerError(e)),
-          )
-      }
-    } catch (err) {
-      this.opts.onError?.(new FirehoseSubscriptionError(err))
-      return this.start()
     }
   }
 
