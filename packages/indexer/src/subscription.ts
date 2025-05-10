@@ -59,6 +59,7 @@ export class FirehoseSubscription {
             idResolverOptions,
             didLockMap,
           },
+          env: {},
         },
       },
     )
