@@ -1,8 +1,7 @@
 import { availableParallelism } from 'node:os'
 import { type RedisClientOptions, createClient } from '@redis/client'
 import { WebSocket } from 'partysocket'
-import { DynamicThreadPool } from 'poolifier'
-import SharedMap from 'sharedmap'
+import { DynamicThreadPool } from 'poolifier-web-worker'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
 import type { IdentityResolverOpts } from '@atproto/identity'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors.js'
@@ -13,10 +12,7 @@ let messagesReceived = 0,
 
 export class FirehoseSubscription {
   private REDIS_SEQ_KEY = 'bsky_indexer:seq'
-  private WORKER_PATH = new URL('./worker.js', import.meta.url).href.replace(
-    'file://',
-    '',
-  )
+  private WORKER_PATH = new URL('./worker.js', import.meta.url)
 
   protected firehose!: WebSocket
   protected pool: DynamicThreadPool<WorkerInput, WorkerOutput>
@@ -28,8 +24,8 @@ export class FirehoseSubscription {
 
   protected settings = {
     minWorkers: availableParallelism() / 2,
-    maxWorkers: availableParallelism(),
-    maxConcurrency: 10,
+    maxWorkers: availableParallelism() * 2,
+    maxConcurrency: 50,
   }
 
   constructor(protected opts: FirehoseSubscriptionOptions) {
@@ -39,7 +35,6 @@ export class FirehoseSubscription {
       this.settings.maxConcurrency = this.opts.maxConcurrency
 
     const { dbOptions, idResolverOptions } = this.opts
-    const didLockMap = new SharedMap(2 ** 15, 256, 16)
 
     this.pool = new DynamicThreadPool(
       this.settings.minWorkers,
@@ -56,7 +51,6 @@ export class FirehoseSubscription {
           workerData: {
             dbOptions,
             idResolverOptions,
-            didLockMap,
           },
           env: {},
         },
@@ -94,7 +88,9 @@ export class FirehoseSubscription {
       void this.pool
         .execute({ chunk }, undefined, [chunk.buffer])
         .then(this.onProcessed)
-        .catch((e) => this.opts.onError?.(new FirehoseWorkerError(e)))
+        .catch((e: unknown) =>
+          this.opts.onError?.(new FirehoseSubscriptionError(e)),
+        )
     }
 
     this.firehose.onerror = (e) =>

@@ -583,8 +583,8 @@ importers:
         specifier: ^3.0.3
         version: 3.0.3
       '@atcute/cbor':
-        specifier: ^2.2.2
-        version: 2.2.2
+        specifier: ^2.2.3
+        version: 2.2.3
       '@atproto/bsky':
         specifier: workspace:^
         version: link:../bsky
@@ -612,12 +612,9 @@ importers:
       partysocket:
         specifier: ^1.1.4
         version: 1.1.4
-      poolifier:
-        specifier: ^4.4.5
-        version: 4.4.5
-      sharedmap:
-        specifier: ^1.2.0
-        version: 1.2.0
+      poolifier-web-worker:
+        specifier: ^0.4.31
+        version: 0.4.31
     devDependencies:
       '@atcute/client':
         specifier: ^3.0.1
@@ -1895,19 +1892,25 @@ packages:
   /@atcute/car@3.0.3:
     resolution: {integrity: sha512-TV596HRRl8LgNcO58fqf6zELjYutrpcj3VeM7cnoEQ3GLwH0hJSbPmYlRxF1gxurJhMEE5PUpIDb+dgDxFRLpw==}
     dependencies:
-      '@atcute/cbor': 2.2.2
+      '@atcute/cbor': 2.2.3
       '@atcute/cid': 2.2.1
       '@atcute/varint': 1.0.2
 
-  /@atcute/cbor@2.2.2:
-    resolution: {integrity: sha512-UzgoEtgGzWy5p9qcFfirRCCgGl1QF8xQF53ycq5yaZ43o7pJdGsctAHK58rTru9QfQxTZs7V9vTDUIxVEZ0s9g==}
+  /@atcute/cbor@2.2.3:
+    resolution: {integrity: sha512-yvzaPI6ChNlqYN41qY8cVGCubgb6N/Y2kpNQnjC5waAZ4Xy2WH7ohuyiv0BQDvgzPT4ww1+9G+zBFxcfM2PH/Q==}
     dependencies:
-      '@atcute/cid': 2.2.1
+      '@atcute/cid': 2.2.2
       '@atcute/multibase': 1.1.3
       '@atcute/uint8array': 1.0.1
 
   /@atcute/cid@2.2.1:
     resolution: {integrity: sha512-tSsVdgx8jj+n6l+MP8IN8rZCR9N4ltJ8EPMiRzo6uduAAygYiZkCRceCOZ57IMtToZcSgm3nxYr4g1aeUbHUcw==}
+    dependencies:
+      '@atcute/multibase': 1.1.3
+      '@atcute/uint8array': 1.0.1
+
+  /@atcute/cid@2.2.2:
+    resolution: {integrity: sha512-deAGMqLAyplt7eIukhkjlsGubvrcMrtXkDKlUYZDo4WUdL7hSjBywtPXf6SbMK+Mjvst7l2+83OqTcY5AuuxtA==}
     dependencies:
       '@atcute/multibase': 1.1.3
       '@atcute/uint8array': 1.0.1
@@ -7723,7 +7726,7 @@ packages:
     resolution: {integrity: sha512-7fcTQtXCbD2t5ls/tvMeYuI8dHTiUuZvrMdD1Mq+ZyMPpjcQdv2OsmflTrldt5XY+kOgoaThImi7QEo07B3o2Q==}
     dependencies:
       '@atcute/car': 3.0.3
-      '@atcute/cbor': 2.2.2
+      '@atcute/cbor': 2.2.3
       nanoevents: 9.1.0
     dev: true
 
@@ -15035,9 +15038,8 @@ packages:
     resolution: {integrity: sha512-r6Q21sKsY1AjTVVjOuU02VYKVNQGJNQHjTIvs4dEbeuuYfxgYk/DGD2mqqq4RDaVkwdSq0VEtmQUOPe/wH8X3g==}
     dev: true
 
-  /poolifier@4.4.5:
-    resolution: {integrity: sha512-4DxdX11+x1D3/zBuNqblFPYwngPKnXVEbhO1cS4T/8ogCwbWp8CS6kp2zm9uJHVbQh6OOaWuVDNiqbr/Sq/YPA==}
-    engines: {node: '>=18.0.0', pnpm: '>=9.0.0'}
+  /poolifier-web-worker@0.4.31:
+    resolution: {integrity: sha512-6//28DxltkLp7zA+jKhRpVOJLeeGVvbFeifdIzHrnlt/ubxBGIzEib2EUH/uusGhj6yS9zsgKul+ZtlifN75yw==}
     dev: false
 
   /possible-typed-array-names@1.0.0:
@@ -16430,10 +16432,6 @@ packages:
 
   /setprototypeof@1.2.0:
     resolution: {integrity: sha512-E5LDX7Wrp85Kil5bhZv46j8jOeboKq5JMmYM3gVGdGH8xFpPWXUMsNrlODCrkoxMEeNi/XZIwuRvY4XNwYMJpw==}
-
-  /sharedmap@1.2.0:
-    resolution: {integrity: sha512-HFG0kIrNP/gr7kX8/HagXYMs7c/1txpLeru0pVmOpxjkdwVQVhpBw5XghKhSXwAPY+8BKON9rHKJkWPASZ1mhA==}
-    dev: false
 
   /sharp@0.32.6:
     resolution: {integrity: sha512-KyLTWwgcR9Oe4d9HwCwNM2l7+J0dUQwn/yf7S0EnTtb0eVS4RxO0eUSvxPtzT4F3SY+C4K6fqdv/DO27sJ/v/w==}
