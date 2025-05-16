@@ -1,10 +1,10 @@
 import { availableParallelism } from 'node:os'
 import { type RedisClientOptions, createClient } from '@redis/client'
 import { WebSocket } from 'partysocket'
+import { DynamicThreadPool } from 'poolifier-web-worker'
 import type { PgOptions } from '@atproto/bsky/dist/data-plane/server/db/types'
 import type { IdentityResolverOpts } from '@atproto/identity'
 import { FirehoseSubscriptionError, FirehoseWorkerError } from './errors.js'
-import { CustomThreadPool } from './pool.js'
 import type { WorkerInput, WorkerOutput } from './worker.js'
 
 let messagesReceived = 0,
@@ -15,7 +15,7 @@ export class FirehoseSubscription {
   private WORKER_PATH = new URL('./worker.js', import.meta.url)
 
   protected firehose!: WebSocket
-  protected pool: CustomThreadPool<WorkerInput, WorkerOutput>
+  protected pool: DynamicThreadPool<WorkerInput, WorkerOutput>
   protected redis?: ReturnType<typeof createClient>
 
   protected cursor = ''
@@ -36,7 +36,7 @@ export class FirehoseSubscription {
 
     const { dbOptions, idResolverOptions } = this.opts
 
-    this.pool = new CustomThreadPool(
+    this.pool = new DynamicThreadPool(
       this.settings.minWorkers,
       this.settings.maxWorkers,
       this.WORKER_PATH,
