@@ -86,7 +86,7 @@ export class FirehoseSubscription {
       const chunk = new Uint8Array(data)
       messagesReceived++
       void this.pool
-        .execute({ chunk }, undefined, [chunk.buffer])
+        .execute({ chunk })
         .then(this.onProcessed)
         .catch((e: unknown) =>
           this.opts.onError?.(new FirehoseSubscriptionError(e)),

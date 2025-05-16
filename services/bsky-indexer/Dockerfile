@@ -52,8 +52,6 @@ EXPOSE 3000
 ENV PORT=3000
 ENV NODE_ENV=production
 
-# https://github.com/nodejs/docker-node/blob/master/docs/BestPractices.md#non-root-user
-USER node
 CMD ["bun", "run", "api.js", "--inspect-brk"]
 
 LABEL org.opencontainers.image.source=https://github.com/bluesky-social/atproto
