@@ -244,12 +244,13 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn('indexedAt', 'varchar', (col) => col.notNull())
     .addColumn('takedownId', 'integer') // foreign key created in moderation-init migration
     .execute()
-  await db.schema // Supports user search
-    .createIndex(`actor_handle_tgrm_idx`)
-    .on('actor')
-    .using('gist')
-    .expression(sql`"handle" gist_trgm_ops`)
-    .execute()
+  // commented out because indexer uses it over handle key when indexing actors
+  // await db.schema // Supports user search
+  //   .createIndex(`actor_handle_tgrm_idx`)
+  //   .on('actor')
+  //   .using('gist')
+  //   .expression(sql`"handle" gist_trgm_ops`)
+  //   .execute()
 
   // actor sync state
   await db.schema
