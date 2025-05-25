@@ -1,3 +1,4 @@
+// @ts-check
 /* eslint-env node */
 /* eslint-disable import/order */
 
@@ -40,23 +41,72 @@ dd.tracer._tracer.startSpan = function (name, options) {
 }
 
 // Tracer code above must come before anything else
+const path = require('node:path')
 const assert = require('node:assert')
 const cluster = require('node:cluster')
-const path = require('node:path')
-
-const { BskyAppView, ServerConfig } = require('@atproto/bsky')
 const { Secp256k1Keypair } = require('@atproto/crypto')
+const bsky = require('@atproto/bsky') // import all bsky features
 
-const main = async () => {
+const appview = async () => {
   const env = getEnv()
-  const config = ServerConfig.readEnv()
+  const config = bsky.ServerConfig.readEnv()
   assert(env.serviceSigningKey, 'must set BSKY_SERVICE_SIGNING_KEY')
+  assert(env.dbPostgresUrl, 'must set BSKY_DB_POSTGRES_URL')
   const signingKey = await Secp256k1Keypair.import(env.serviceSigningKey)
-  const bsky = BskyAppView.create({ config, signingKey })
-  await bsky.start()
+
+  // starts: involve logics in packages/dev-env/src/bsky.ts >>>>>>>>>>>>>
+  // Separate migration db in case migration changes some connection state that we need in the tests, e.g. "alter database ... set ..."
+  const migrationDb = new bsky.Database({
+    url: env.dbPostgresUrl,
+    schema: env.dbPostgresSchema,
+  })
+  await migrationDb.migrateToLatestOrThrow()
+  await migrationDb.close()
+
+  const db = new bsky.Database({
+    url: env.dbPostgresUrl,
+    schema: env.dbPostgresSchema,
+    poolSize: env.dbPoolSize,
+  })
+
+  // ends: involve logics in packages/dev-env/src/bsky.ts   <<<<<<<<<<<<<
+
+  const server = bsky.BskyAppView.create({ config, signingKey })
+  await server.start()
   // Graceful shutdown (see also https://aws.amazon.com/blogs/containers/graceful-shutdowns-with-ecs/)
   const shutdown = async () => {
-    await bsky.destroy()
+    await server.destroy()
+    await db.close()
+  }
+  process.on('SIGTERM', shutdown)
+  process.on('disconnect', shutdown) // when clustering
+}
+
+const dataplane = async () => {
+  const env = getEnv()
+  const config = bsky.ServerConfig.readEnv()
+  assert(env.dbPostgresUrl, 'must set BSKY_DB_POSTGRES_URL')
+  assert(env.bsyncPort, 'must set BSKY_BSYNC_PORT')
+  assert(env.dataplanePort, 'must set BSKY_DATAPLANE_PORT')
+
+  const db = new bsky.Database({
+    url: env.dbPostgresUrl,
+    schema: env.dbPostgresSchema,
+    poolSize: env.dbPoolSize,
+  })
+
+  const bsync = await bsky.MockBsync.create(db, env.bsyncPort)
+
+  const server = await bsky.DataPlaneServer.create(
+    db,
+    env.dataplanePort,
+    config.didPlcUrl,
+  )
+  // Graceful shutdown (see also https://aws.amazon.com/blogs/containers/graceful-shutdowns-with-ecs/)
+  const shutdown = async () => {
+    await server.destroy()
+    await bsync.destroy()
+    await db.close()
   }
   process.on('SIGTERM', shutdown)
   process.on('disconnect', shutdown) // when clustering
@@ -64,6 +114,13 @@ const main = async () => {
 
 const getEnv = () => ({
   serviceSigningKey: process.env.BSKY_SERVICE_SIGNING_KEY || undefined,
+  dbPostgresUrl: process.env.BSKY_DB_POSTGRES_URL || undefined,
+  dbPostgresSchema: process.env.BSKY_DB_POSTGRES_SCHEMA || undefined,
+  dbPoolSize: maybeParseInt(process.env.BSKY_DB_POOL_SIZE) || undefined,
+  dataplanePort: maybeParseInt(process.env.BSKY_DATAPLANE_PORT) || undefined,
+  bsyncPort: maybeParseInt(process.env.BSKY_BSYNC_PORT) || undefined,
+  migration: process.env.ENABLE_MIGRATIONS === 'true' || undefined,
+  repoProvider: process.env.BSKY_REPO_PROVIDER || undefined,
 })
 
 const maybeParseInt = (str) => {
@@ -91,28 +148,50 @@ const maintainXrpcResource = (span, req) => {
 const workerCount = maybeParseInt(process.env.CLUSTER_WORKER_COUNT)
 
 if (workerCount) {
+  if (workerCount < 3) {
+    throw new Error('CLUSTER_WORKER_COUNT must be at least 3')
+  }
+
   if (cluster.isPrimary) {
-    console.log(`primary ${process.pid} is running`)
-    const workers = new Set()
-    for (let i = 0; i < workerCount; ++i) {
-      workers.add(cluster.fork())
-    }
     let teardown = false
-    cluster.on('exit', (worker) => {
+
+    const workers = new Set()
+
+    const spawnWorker = (type) => {
+      const worker = cluster.fork({ WORKER_TYPE: type })
+      worker.on('exit', onExit(worker, type))
+      workers.add(worker)
+    }
+
+    const onExit = (worker, type) => () => {
       workers.delete(worker)
-      if (!teardown) {
-        workers.add(cluster.fork()) // restart on crash
-      }
-    })
+      if (!teardown) spawnWorker(type)
+    }
+
+    console.log(`primary ${process.pid} is running`)
+
+    spawnWorker('dataplane')
+    for (let i = 1; i < workerCount; ++i) {
+      spawnWorker('appview')
+    }
     process.on('SIGTERM', () => {
       teardown = true
       console.log('disconnecting workers')
       workers.forEach((w) => w.disconnect())
     })
   } else {
-    console.log(`worker ${process.pid} is running`)
-    main()
+    console.log(
+      `worker ${process.pid} is running as ${process.env.WORKER_TYPE}`,
+    )
+    if (process.env.WORKER_TYPE === 'appview') {
+      appview()
+    } else if (process.env.WORKER_TYPE === 'dataplane') {
+      dataplane()
+    } else {
+      throw new Error(`unknown worker type ${process.env.WORKER_TYPE}`)
+    }
   }
 } else {
-  main() // non-clustering
+  dataplane()
+  appview() // non-clustering
 }
