@@ -392,7 +392,7 @@ export class AuthVerifier {
     return {
       viewer,
       includeTakedowns: includeTakedownsAnd3pBlocks,
-      include3pBlocks: includeTakedownsAnd3pBlocks,
+      include3pBlocks: true,
       canPerformTakedown,
     }
   }

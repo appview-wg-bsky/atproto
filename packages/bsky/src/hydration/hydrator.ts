@@ -72,7 +72,7 @@ export class HydrateCtx {
   viewer = this.vals.viewer !== null ? serviceRefToDid(this.vals.viewer) : null
   includeTakedowns = this.vals.includeTakedowns
   includeActorTakedowns = this.vals.includeActorTakedowns
-  include3pBlocks = this.vals.include3pBlocks
+  include3pBlocks = true
   constructor(private vals: HydrateCtxVals) {}
   // Convenience with use with dataplane.getActors cache control
   get skipCacheForViewer() {
@@ -1196,7 +1196,7 @@ export class Hydrator {
       labelers: availableLabelers,
       viewer: vals.viewer,
       includeTakedowns: vals.includeTakedowns,
-      include3pBlocks: vals.include3pBlocks,
+      include3pBlocks: true,
     })
   }
 
