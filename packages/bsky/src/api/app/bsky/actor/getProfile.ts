@@ -1,5 +1,11 @@
+import { CID } from 'multiformats/cid'
+import { AtUri, AtpAgent } from '@atproto/api'
+import { WriteOpAction } from '@atproto/repo'
 import { InvalidRequestError } from '@atproto/xrpc-server'
 import { AppContext } from '../../../../context'
+import { BackgroundQueue } from '../../../../data-plane/server/background'
+import { Database } from '../../../../data-plane/server/db'
+import { IndexingService } from '../../../../data-plane/server/indexing'
 import {
   HydrateCtx,
   HydrationState,
@@ -10,6 +16,12 @@ import { QueryParams } from '../../../../lexicon/types/app/bsky/actor/getProfile
 import { createPipeline, noRules } from '../../../../pipeline'
 import { Views } from '../../../../views'
 import { resHeaders } from '../../../util'
+
+const indexProfilesDb = new Database({
+    url: process.env.BSKY_DB_POSTGRES_URL!,
+    schema: process.env.BSKY_DB_POSTGRES_SCHEMA!,
+  }),
+  indexProfilesQueue = new BackgroundQueue(indexProfilesDb)
 
 export default function (server: Server, ctx: AppContext) {
   const getProfile = createPipeline(skeleton, hydration, noRules, presentation)
@@ -25,6 +37,35 @@ export default function (server: Server, ctx: AppContext) {
       })
 
       const result = await getProfile({ ...params, hydrateCtx }, ctx)
+
+      // awful hack, remove asap
+      if (!result.createdAt && !result.displayName) {
+        indexProfilesQueue.add(async () => {
+          const idx = new IndexingService(
+            indexProfilesDb,
+            ctx.idResolver,
+            indexProfilesQueue,
+          )
+          const agent = new AtpAgent({
+            service: (await ctx.idResolver.did.resolveAtprotoData(result.did))
+              .pds,
+          })
+          const { data: profile } = await agent.com.atproto.repo.getRecord({
+            repo: result.did,
+            collection: 'app.bsky.actor.profile',
+            rkey: 'self',
+          })
+          if (profile)
+            await idx.indexRecord(
+              new AtUri(profile.uri),
+              CID.parse(profile.cid!),
+              profile.value,
+              WriteOpAction.Create,
+              // @ts-expect-error
+              profile.value.createdAt || new Date().toISOString(),
+            )
+        })
+      }
 
       const repoRev = await ctx.hydrator.actor.getRepoRevSafe(viewer)
 
