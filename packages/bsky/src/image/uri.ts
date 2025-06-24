@@ -82,8 +82,8 @@ export const presets: Record<ImagePreset, Options> = {
   avatar_thumbnail: {
     format: 'jpeg',
     fit: 'inside',
-    height: 2000,
-    width: 2000,
+    height: 128,
+    width: 128,
     min: true,
   },
   banner: {
