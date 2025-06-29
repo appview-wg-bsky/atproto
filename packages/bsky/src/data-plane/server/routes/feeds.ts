@@ -79,18 +79,29 @@ export default (db: Database): Partial<ServiceImpl<typeof Service>> => ({
       ref('feed_item.cid'),
     )
 
-    let followQb = db.db
-      .selectFrom('feed_item')
-      .innerJoin('follow', 'follow.subjectDid', 'feed_item.originatorDid')
+    const followQb = db.db
+      .selectFrom('follow')
+      .innerJoinLateral(
+        (eb) =>
+          paginate(
+            eb
+              .selectFrom('feed_item')
+              .selectAll()
+              .whereRef('feed_item.originatorDid', '=', 'follow.subjectDid'),
+            {
+              limit,
+              cursor,
+              keyset,
+              tryIndex: true,
+            },
+          ).as('fi'),
+        (join) => join.onTrue(),
+      )
       .where('follow.creator', '=', actorDid)
-      .selectAll('feed_item')
-
-    followQb = paginate(followQb, {
-      limit,
-      cursor,
-      keyset,
-      tryIndex: true,
-    })
+      .selectAll('fi')
+      .orderBy('fi.sortAt', 'desc')
+      .orderBy('fi.cid', 'desc')
+      .limit(limit)
 
     let selfQb = db.db
       .selectFrom('feed_item')
